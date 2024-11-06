@@ -10,6 +10,7 @@ import {
   SelectionExtension,
 } from '@speckle/viewer';
 
+//import { makeMeasurementsUI } from './MeasurementsUI'; // Interface utilisateur pour les mesures
 import { Box3 } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
 import { Pane } from 'tweakpane';
 
@@ -22,7 +23,7 @@ interface Param {
 }
 
 async function main() {
-  let btnUrlDoc = null;
+  let btnUrlDoc: any = null;
 
   /** Get the HTML container */
   const container = document.getElementById('renderer') as HTMLElement;
