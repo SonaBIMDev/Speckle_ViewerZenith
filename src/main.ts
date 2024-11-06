@@ -105,7 +105,6 @@ async function main() {
           // Rechercher dans cette liste le TreeNode avec l'elementId correspondant.
           tnFinded = treeNodeMap.get('1206565');
           break;
-          break;
         case 'scene':
           // Rechercher dans cette liste le TreeNode avec l'elementId correspondant.
           tnFinded = treeNodeMap.get('1206442');
@@ -205,7 +204,7 @@ async function main() {
 
       if (parameterUrl) {
         if (parameterUrl.value && parameterUrl.value.trim() !== '') {
-          btnUrlDoc = pane
+          btnUrlDoc = (pane as any)
             .addButton({
               title: '...',
               disabled: false,
@@ -214,11 +213,11 @@ async function main() {
             })
             .on('click', () => {
               // Ouvre l'URL dans un nouvel
-              window.open(parameterUrl.value, '_blank');
-              onglet;
+              window.open(parameterUrl.value, '_blank'); // Ouvre l'URL dans un nouvel onglet
             });
         } else {
-          btnUrlDoc = pane.addButton({
+          btnUrlDoc = (pane as any)
+          .addButton({
             title: '...',
             disabled: true,
             index: 2,
@@ -226,7 +225,8 @@ async function main() {
           });
         }
       } else {
-        btnUrlDoc = pane.addButton({
+        btnUrlDoc = (pane as any)
+        .addButton({
           title: '...',
           disabled: true,
           index: 2,
