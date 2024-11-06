@@ -13,7 +13,6 @@ import {
 //import { makeMeasurementsUI } from './MeasurementsUI'; // Interface utilisateur pour les mesures
 import { Box3 } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
 import { Pane } from 'tweakpane'; // Bibliothèque pour créer une interface utilisateur (boutons, menus, etc.)
-import { Spinner } from "spin.js";  // Bibliothèque pour afficher un indicateur de chargement
 
 interface Param {
   id: string;
@@ -91,7 +90,7 @@ async function main() {
     // Gérer les erreurs de chargement
     // Exemple : Afficher un message d'erreur ou réessayer le chargement
   }
-  
+
  
   // Map pour indexer les TreeNode par elementId
   const treeNodeMap = new Map<string, TreeNode>();
