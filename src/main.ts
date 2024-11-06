@@ -4,13 +4,11 @@ import {
   SpeckleLoader,
   UrlHelper,
   CameraController,
-  SectionOutlines,
   SectionTool,
   SectionOutlines,
   SelectionExtension,
 } from '@speckle/viewer';
 
-//import { makeMeasurementsUI } from './MeasurementsUI';
 import { Box3 } from 'three';
 import { Pane } from 'tweakpane';
 
