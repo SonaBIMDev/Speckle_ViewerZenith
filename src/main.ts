@@ -3,6 +3,7 @@ import {
   DefaultViewerParams,
   SpeckleLoader,
   UrlHelper,
+  TreeNode, // Représente un nœud d'arbre dans le modèle 3D
   CameraController,
   SectionTool,
   SectionOutlines,
@@ -11,6 +12,14 @@ import {
 
 import { Box3 } from 'three';
 import { Pane } from 'tweakpane';
+
+interface Param {
+  id: string;
+  name: string;
+  units: number;
+  value: string;
+  speckletype: string;
+}
 
 async function main() {
   let btnUrlDoc = null;
@@ -36,7 +45,7 @@ async function main() {
 
   /** Add the sectionTools extension for extra interactivity */
   const sections: SectionTool = viewer.createExtension(SectionTool);
-  const oulines: SectionOutlines = viewer.createExtension(SectionOutlines);
+  viewer.createExtension(SectionOutlines);
 
   const urls = await UrlHelper.getResourceUrls(
     'https://app.speckle.systems/projects/61c962b75e/models/f7bd3d6d20'
@@ -65,7 +74,7 @@ async function main() {
 
   //#region Pane
   const pane = new Pane({ title: 'UI', expanded: true });
-  pane
+  (pane as any)
     .addBlade({
       view: 'list',
       label: 'Vues',
@@ -77,7 +86,7 @@ async function main() {
       ],
       value: 'general',
     })
-    .on('change', (ev) => {
+    .on('change', (ev: any) => {
       let elementid: string = '';
       let tnFinded: TreeNode = null;
       if (!tn_GenericModels) return;
@@ -114,7 +123,7 @@ async function main() {
       }
     });
 
-  btnUrlDoc = pane
+  btnUrlDoc = (pane as any)
     .addButton({
       title: '...',
       disabled: true,
