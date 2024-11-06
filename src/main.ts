@@ -12,7 +12,8 @@ import {
 
 //import { makeMeasurementsUI } from './MeasurementsUI'; // Interface utilisateur pour les mesures
 import { Box3 } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
-import { Pane } from 'tweakpane';
+import { Pane } from 'tweakpane'; // Bibliothèque pour créer une interface utilisateur (boutons, menus, etc.)
+import { Spinner } from "spin.js";  // Bibliothèque pour afficher un indicateur de chargement
 
 interface Param {
   id: string;
@@ -24,6 +25,12 @@ interface Param {
 
 async function main() {
   let btnUrlDoc: any = null;
+
+   // Afficher le spinner au chargement initial
+   const spinnerContainer = document.getElementById("spinner-container");
+   if (spinnerContainer) {
+     spinnerContainer.style.display = "block";
+   }
 
   /** Get the HTML container */
   const container = document.getElementById('renderer') as HTMLElement;
@@ -48,16 +55,43 @@ async function main() {
   const sections: SectionTool = viewer.createExtension(SectionTool);
   viewer.createExtension(SectionOutlines);
 
+  
+  /*
   const urls = await UrlHelper.getResourceUrls(
     'https://app.speckle.systems/projects/61c962b75e/models/f7bd3d6d20'
   );
   for (const url of urls) {
-    const loader = new SpeckleLoader(viewer.getWorldTree(), url, '');
-    /** Load the speckle data
-     * Modify
-     */
+    const loader = new SpeckleLoader(viewer.getWorldTree(), url, '');    
     await viewer.loadObject(loader, true);
   }
+  */
+
+  const resource =
+    "https://app.speckle.systems/projects/61c962b75e/models/f7bd3d6d20";
+
+  try {
+    /** Create a loader for the speckle stream */
+    const urls = await UrlHelper.getResourceUrls(resource);
+
+    // Fonction pour charger un objet Speckle
+      async function loadSpeckleObject(url: string) {
+        const loader = new SpeckleLoader(viewer.getWorldTree(), url, "");
+        await viewer.loadObject(loader, true);
+      }
+
+      // Charge tous les objets Speckle en parallèle
+      await Promise.all(urls.map(loadSpeckleObject));
+
+      // Cache le spinner après le chargement
+      if (spinnerContainer) {
+        spinnerContainer.style.display = "none";
+      }  
+  }catch (error) {
+    console.error("Erreur de chargement des données : ", error);
+    // Gérer les erreurs de chargement
+    // Exemple : Afficher un message d'erreur ou réessayer le chargement
+  }
+  
  
   // Map pour indexer les TreeNode par elementId
   const treeNodeMap = new Map<string, TreeNode>();
