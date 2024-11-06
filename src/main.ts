@@ -52,14 +52,16 @@ async function main() {
   );
   for (const url of urls) {
     const loader = new SpeckleLoader(viewer.getWorldTree(), url, '');
-    /** Load the speckle data */
+    /** Load the speckle data
+     * Modify
+     */
     await viewer.loadObject(loader, true);
   }
-
+ 
   // Map pour indexer les TreeNode par elementId
   const treeNodeMap = new Map<string, TreeNode>();
   //get all generic_models
-  const tn_GenericModels: Treenode[] = viewer
+  const tn_GenericModels: TreeNode[] = viewer
     .getWorldTree()
     .findAll((node: TreeNode) => {
       if (!node.model.raw.category) return null;
