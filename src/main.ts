@@ -10,7 +10,7 @@ import {
   SelectionExtension,
 } from '@speckle/viewer';
 
-import { Box3 } from 'three';
+import { Box3 } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
 import { Pane } from 'tweakpane';
 
 interface Param {
