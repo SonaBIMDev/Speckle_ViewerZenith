@@ -1,5 +1,17 @@
-body {
-  font-family: sans-serif;
+body,
+html {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+#renderer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
 }
 
 #spinner-container {
@@ -21,6 +33,48 @@ body {
   border-radius: 50%;
   animation: spin 1.5s linear infinite; /* Animation de rotation plus lente */
   margin: 0 auto; /* Centrer horizontalement */
+}
+
+#overlay {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+#tweakpane-container {
+  width: 250px; /* Ajustez selon vos besoins */
+}
+
+#logoZenith {
+  position: fixed; /* Utilise fixed au lieu de absolute pour rester en place même lors du défilement */
+  top: 10px; /* Ajustez selon vos préférences */
+  left: 10px; /* Ajustez selon vos préférences */
+  z-index: 9999; /* Un z-index élevé pour s'assurer qu'il est au-dessus des autres éléments */
+  pointer-events: none; /* Permet aux clics de passer à travers le logo si nécessaire */
+}
+
+#logoZenith img {
+  width: 100px; /* Ajustez la taille selon vos besoins */
+  height: auto;
+  display: block; /* Élimine l'espace supplémentaire sous l'image */
+}
+
+#logoSONA {
+  position: fixed; /* Utilise fixed pour rester en place même lors du défilement */
+  bottom: 10px; /* Ajustez selon vos préférences */
+  right: 10px; /* Ajustez selon vos préférences */
+  z-index: 9999; /* Assure que le logo est au-dessus des autres éléments */
+  pointer-events: none; /* Permet aux clics de passer à travers le logo si nécessaire */
+}
+
+#logoSONA img {
+  width: 100px; /* Ajustez la taille selon vos besoins */
+  height: auto;
+  display: block; /* Élimine l'espace supplémentaire sous l'image */
 }
 
 @keyframes spin {
