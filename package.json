@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@speckle/viewer": "2.20.1",
-    "tweakpane": "^3.0.8"
+    "tweakpane": "^3.0.8",
+    "three.js": "0.77.1"
   },
   "devDependencies": {
     "typescript": "^5.5.3",
