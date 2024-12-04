@@ -27,22 +27,22 @@ interface Param {
 const downloadOptions = [
   {
     text: 'Revit',
-    value: 'http://www.files.sona-architecture.com/DEV/ZENITH/download/ZEN_EXIS_SONA_R23_detached.rvt',
+    value: 'https://mega.nz/file/1SthTC4T#tg9PVrAJnxciXXn23FWxM4kIRjdEQFxineIrRjrYqMA',
   }, // Remplacez par l'URL réelle
   {
     text: 'Autocad',
     value:
-      'http://www.files.sona-architecture.com/DEV/ZENITH/download/ZEN_EXIS_SONA_R23_SONA-ARCHITECTURE.dwg',
+      'https://mega.nz/file/MGUUBQDb#yi4V7tnzlpFqCSVkPcngjnrvJkGybriJ-qXAWMzgrW0',
   }, // Remplacez par l'URL réelle
   {
     text: 'Sketchup',
     value:
-      'http://www.files.sona-architecture.com/DEV/ZENITH/download/ZEN_EXIS_SONA_R23_SONA-ARCHITECTURE.skp',
+      'https://mega.nz/file/la0lDC4C#i3dX4ziBr0YU0e2-PCNJIaAkKpQtwZqLoSrM59DQ_20',
   }, // Remplacez par l'URL réelle
   {
     text: 'Ifc',
     value:
-      'http://www.files.sona-architecture.com/DEV/ZENITH/download/ZEN_EXIS_SONA_R23_SONA-ARCHITECTURE.ifc',
+      'https://mega.nz/file/AL9U1DBY#MD1Vzb4VwfUGTycO0O65wCRKqqbYMbXRo-PNbl3qIhI',
   }, // Remplacez par l'URL réelle
 ];
 
@@ -353,13 +353,8 @@ async function main() {
       );
 
       if (selectedOption && selectedOption.value) {
-        // Création d'un élément <a> pour simuler "Enregistrer sous"
-        const link = document.createElement('a');
-        link.href = selectedOption.value;
-        link.download = selectedOption.text; // Nom suggéré pour le téléchargement
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link); // Nettoyage après l'action
+        // Ouvrir le lien dans un nouvel onglet
+        window.open(selectedOption.value, '_blank');
       } else {
         console.error('Aucun format valide sélectionné.');
       }
