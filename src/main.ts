@@ -22,9 +22,6 @@ interface Param {
   speckletype: string;
 }
 
-let folderViews = null;
-let folderDownload = null;
-let btnDownload = null;
 
 // Ajouter une nouvelle liste déroulante dans le Pane
 const downloadOptions = [
@@ -138,7 +135,7 @@ async function main() {
   //#region Pane
   const pane = new Pane({ title: 'UI', expanded: true });
   
-  folderViews = (pane as any).addFolder({
+  const folderViews = (pane as any).addFolder({
     title: 'Views',
     expanded: true,
   });
@@ -147,11 +144,12 @@ async function main() {
     view: 'separator',
   });
 
-  folderDownload = (pane as any).addFolder({
+  const folderDownload = (pane as any).addFolder({
     title: 'Download',
     expanded: true,
   });
 
+  
   folderViews
     .addBlade({
       view: 'list',
@@ -342,7 +340,7 @@ async function main() {
       value: downloadOptions[0].value,
     });
 
-    btnDownload = folderDownload
+    const btnDownload = folderDownload
     .addButton({
       title: '...',
       label: 'Save as', // optional
@@ -366,6 +364,7 @@ async function main() {
         console.error('Aucun format valide sélectionné.');
       }
     });
+
 
     //#endregion
 
@@ -436,8 +435,8 @@ async function main() {
 
       if (parameterUrl) {
         if (parameterUrl.value && parameterUrl.value.trim() !== '') {
-          btnUrlDoc = (pane as any)
-            .addButton({
+          btnUrlDoc = folderViews
+          .addButton({
               title: '...',
               disabled: false,
               index: 3,
@@ -448,7 +447,7 @@ async function main() {
               window.open(parameterUrl.value, '_blank'); // Ouvre l'URL dans un nouvel onglet
             });
         } else {
-          btnUrlDoc = (pane as any)
+          btnUrlDoc = folderViews
           .addButton({
             title: '...',
             disabled: true,
@@ -457,7 +456,7 @@ async function main() {
           });
         }
       } else {
-        btnUrlDoc = (pane as any)
+        btnUrlDoc = folderViews
         .addButton({
           title: '...',
           disabled: true,
