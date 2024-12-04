@@ -22,6 +22,33 @@ interface Param {
   speckletype: string;
 }
 
+let folderViews = null;
+let folderDownload = null;
+let btnDownload = null;
+
+// Ajouter une nouvelle liste déroulante dans le Pane
+const downloadOptions = [
+  {
+    text: 'Revit',
+    value: 'http://www.files.sona-architecture.com/DEV/ZENITH/download/ZEN_EXIS_SONA_R23_detached.rvt',
+  }, // Remplacez par l'URL réelle
+  {
+    text: 'Autocad',
+    value:
+      'http://www.files.sona-architecture.com/DEV/ZENITH/download/ZEN_EXIS_SONA_R23_SONA-ARCHITECTURE.dwg',
+  }, // Remplacez par l'URL réelle
+  {
+    text: 'Sketchup',
+    value:
+      'http://www.files.sona-architecture.com/DEV/ZENITH/download/ZEN_EXIS_SONA_R23_SONA-ARCHITECTURE.skp',
+  }, // Remplacez par l'URL réelle
+  {
+    text: 'Ifc',
+    value:
+      'http://www.files.sona-architecture.com/DEV/ZENITH/download/ZEN_EXIS_SONA_R23_SONA-ARCHITECTURE.ifc',
+  }, // Remplacez par l'URL réelle
+];
+
 async function main() {
   let btnUrlDoc: any = null;
 
@@ -110,15 +137,38 @@ async function main() {
 
   //#region Pane
   const pane = new Pane({ title: 'UI', expanded: true });
-  (pane as any)
+  
+  folderViews = (pane as any).addFolder({
+    title: 'Views',
+    expanded: true,
+  });
+
+  (pane as any).addBlade({
+    view: 'separator',
+  });
+
+  folderDownload = (pane as any).addFolder({
+    title: 'Download',
+    expanded: true,
+  });
+
+  folderViews
     .addBlade({
       view: 'list',
-      label: 'Vues',
+      label: 'Views',
       options: [
         { text: 'General', value: 'general' },
-        { text: 'Hall', value: 'hall' },
         { text: 'Scène', value: 'scene' },
-        { text: 'Gradins', value: 'gradins' },
+        { text: 'Régie', value: 'regie' },
+        { text: 'Bar craft', value: 'bar-craft' },
+        { text: 'Bar étage', value: 'bar-etage' },
+        { text: 'Hall milieu', value: 'hall-milieu' },
+        { text: 'Salle jardin', value: 'jardin' },
+        { text: 'Gradins cour', value: 'gradins-cour' },
+        { text: 'Gradins salle', value: 'gradins-salle' },
+        { text: 'Gradins jardin', value: 'gradins-jardin' },
+        { text: 'Passerelle', value: 'passerelle' },
+        { text: 'Passerelle salle', value: 'passerelle-salle' },
       ],
       value: 'general',
     })
@@ -134,16 +184,132 @@ async function main() {
           // Mettre à jour le bouton avec le nouveau paramètre URL_DOC trouvé
           updateButtonWithUrl(null);
           break;
-        case 'hall':
-          // Rechercher dans cette liste le TreeNode avec l'elementId correspondant.
-          tnFinded = treeNodeMap.get('1206565');
-          break;
         case 'scene':
           // Rechercher dans cette liste le TreeNode avec l'elementId correspondant.
-          tnFinded = treeNodeMap.get('1206442');
+          tnFinded = treeNodeMap.get('1229389');
           break;
-        case 'gradins':
-          tnFinded = treeNodeMap.get('1206592');
+        case 'regie':
+          // Rechercher dans cette liste le TreeNode avec l'elementId correspondant.
+          tnFinded = treeNodeMap.get('1228695');
+          break;
+        case 'bar-craft':
+          tnFinded = treeNodeMap.get('1226120');
+          break;
+        case 'bar-etage':
+          tnFinded = treeNodeMap.get('1226484');
+          break;
+        case 'hall-milieu':
+          tnFinded = treeNodeMap.get('1226626');
+          break;
+        case 'jardin':
+          tnFinded = treeNodeMap.get('1228946');
+          break;
+        case 'gradins-cour':
+          tnFinded = treeNodeMap.get('1225014');
+          break;
+        case 'gradins-salle':
+          tnFinded = treeNodeMap.get('1225435');
+          break;
+        case 'radins-jardin':
+          tnFinded = treeNodeMap.get('1225954');
+          break;
+        case 'passerelle':
+          tnFinded = treeNodeMap.get('1227119');
+          break;
+        case 'passerelle-salle':
+          tnFinded = treeNodeMap.get('1227371');
+          break;
+      }
+
+      if (tnFinded) {
+        ZoomOnTreeNode(tnFinded);
+        const id = tnFinded.model.id;
+        console.log(`Id ${id} pour le node elementid ${elementid}`);
+      } else {
+        console.log(
+          `Impossible de trouver le node pour l'elementid ${elementid}`
+        );
+      }
+    });
+  
+  (pane as any).addBlade({
+    view: 'separator',
+  });
+
+  folderViews
+    .addBlade({
+      view: 'list',
+      label: 'Gauges',
+      options: [
+        { text: 'General', value: 'general' },
+        { text: '3000 Salle', value: '3000-salle' },
+        { text: '3000 Scène', value: '3000-scene' },
+        { text: '4000 Salle', value: '4000-salle' },
+        { text: '4000 Scène', value: '4000-scene' },
+        { text: '5000 Salle', value: '5000-salle' },
+        { text: '5000 Scène', value: '5000-scene' },
+        { text: '5500 Salle', value: '5500-salle' },
+        { text: '5500 Scène', value: '5500-scene' },
+        { text: '6500 Salle', value: '6500-salle' },
+        { text: '6500 Scène', value: '6500-scene' },
+        { text: '8500 Salle', value: '8500-salle' },
+        { text: '8500 Placebo', value: '8500-placebo' },
+        { text: '8500 Scène', value: '8500-scene' },
+      ],
+      value: 'general',
+    })
+    .on('change', (ev: any) => {
+      let elementid: string = '';
+      let tnFinded: TreeNode = null;
+      if (!tn_GenericModels) return;
+
+      switch (ev.value) {
+        case 'general':
+          selection.clearSelection();
+          cameraController.setCameraView([], false);
+          // Mettre à jour le bouton avec le nouveau paramètre URL_DOC trouvé
+          updateButtonWithUrl(null);
+          break;
+        case '3000-salle':
+          // Rechercher dans cette liste le TreeNode avec l'elementId correspondant.
+          tnFinded = treeNodeMap.get('1229474');
+          break;
+        case '3000-scene':
+          // Rechercher dans cette liste le TreeNode avec l'elementId correspondant.
+          tnFinded = treeNodeMap.get('1229711');
+          break;
+        case '4000-salle':
+          tnFinded = treeNodeMap.get('1229804');
+          break;
+        case '4000-scene':
+          tnFinded = treeNodeMap.get('1229855');
+          break;
+        case '5000-salle':
+          tnFinded = treeNodeMap.get('1229946');
+          break;
+        case '5000-scene':
+          tnFinded = treeNodeMap.get('1230045');
+          break;
+        case '5500-salle':
+          tnFinded = treeNodeMap.get('1230211');
+          break;
+        case '5500-scene':
+          tnFinded = treeNodeMap.get('1230320');
+          break;
+        case '6500-salle':
+          tnFinded = treeNodeMap.get('1230355');
+          break;
+        case '6500-scen':
+          tnFinded = treeNodeMap.get('1230382');
+          break;
+        case '8500-salle':
+          tnFinded = treeNodeMap.get('1230447');
+          break;
+        case '8500-placebo':
+          tnFinded = treeNodeMap.get('1230502');
+          break;
+        case '8500-sceno':
+          tnFinded = treeNodeMap.get('1230693');
           break;
       }
 
@@ -158,17 +324,50 @@ async function main() {
       }
     });
 
-  btnUrlDoc = (pane as any)
+  btnUrlDoc = folderViews
     .addButton({
       title: '...',
       disabled: true,
-      label: 'panoramic', // optional
+      label: 'Vue 360', // optional
     })
     .on('click', () => {
       // L'action de clic initial est vide, car l'URL sera mise à jour plus tard
     });
 
-  //#endregion
+  
+    const formatDropdown = folderDownload.addBlade({
+      view: 'list',
+      label: 'Format',
+      options: downloadOptions,
+      value: downloadOptions[0].value,
+    });
+
+    btnDownload = folderDownload
+    .addButton({
+      title: '...',
+      label: 'Save as', // optional
+    })
+    .on('click', () => {
+      // L'action de clic initial est vide, car l'URL sera mise à jour plus tard
+      const selectedValue = formatDropdown.value; // Accès direct à la valeur sélectionnée
+      const selectedOption = downloadOptions.find(
+        (opt) => opt.value === selectedValue
+      );
+
+      if (selectedOption && selectedOption.value) {
+        // Création d'un élément <a> pour simuler "Enregistrer sous"
+        const link = document.createElement('a');
+        link.href = selectedOption.value;
+        link.download = selectedOption.text; // Nom suggéré pour le téléchargement
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link); // Nettoyage après l'action
+      } else {
+        console.error('Aucun format valide sélectionné.');
+      }
+    });
+
+    //#endregion
 
   /** Enable the section tool */
   sections.toggle();
@@ -241,8 +440,8 @@ async function main() {
             .addButton({
               title: '...',
               disabled: false,
-              index: 2,
-              label: 'panoramic',
+              index: 3,
+              label: 'Vue 360',
             })
             .on('click', () => {
               // Ouvre l'URL dans un nouvel
@@ -253,8 +452,8 @@ async function main() {
           .addButton({
             title: '...',
             disabled: true,
-            index: 2,
-            label: 'panoramic',
+            index: 3,
+            label: 'Vue 360',
           });
         }
       } else {
@@ -262,8 +461,8 @@ async function main() {
         .addButton({
           title: '...',
           disabled: true,
-          index: 2,
-          label: 'panoramic',
+          index: 3,
+          label: 'Vue 360',
         });
       }
     }
