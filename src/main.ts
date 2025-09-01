@@ -67,6 +67,10 @@ async function main() {
   /** Initialise the viewer */
   await viewer.init();
 
+  // Get the underlying Three.js renderer from the Speckle Viewer
+  // @ts-ignore
+  const threeRenderer = viewer.getRenderer().renderer;
+
   /** Add the stock camera controller extension */
   const cameraController: CameraController =
     viewer.createExtension(CameraController);
@@ -146,6 +150,12 @@ async function main() {
 
   const folderDownload = (pane as any).addFolder({
     title: 'Download',
+    expanded: true,
+  });
+
+  // === VR (Quest) — même méthodo que le reste (addFolder/addBlade/addButton) ===
+  const folderVR = (pane as any).addFolder({
+    title: 'VR (Quest)',
     expanded: true,
   });
 
@@ -396,6 +406,48 @@ async function main() {
       } else {
         console.error('Aucun format valide sélectionné.');
       }
+    });
+
+    // Bouton "Mode VR" (désactivé par défaut, on l'activera si WebXR est supporté)
+    const btnEnterVR: any = folderVR.addButton({
+      title: 'Entrer en VR',
+      label: 'Mode VR'
+    });
+
+    // Handler du bouton (note: callback async pour pouvoir "await")
+    btnEnterVR.on('click', async () => {
+      try {
+        // @ts-ignore
+        if (!navigator.xr) { alert('WebXR non dispo (HTTPS + Meta Quest Browser).'); return; }
+        // @ts-ignore
+        const ok = await navigator.xr.isSessionSupported?.('immersive-vr');
+        if (!ok) { alert('Immersive VR non supporté sur ce navigateur.'); return; }
+
+        // @ts-ignore
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
+        });
+
+        await threeRenderer.xr.setSession(session);
+
+        // >>> Boucle XR : rendre à CHAQUE frame XR
+        threeRenderer.setAnimationLoop(() => {
+          // Speckle n’aime pas qu’on touche directement à scene/camera.
+          // La voie propre est de demander un rendu à chaque frame :
+          viewer.requestRender();
+        });
+      } catch (e) {
+        console.error(e);
+        alert('Impossible de démarrer la session VR.');
+      }
+    });
+
+
+    // Bouton "Quitter la VR"
+    const btnExitVR: any = folderVR.addButton({ title: 'Quitter la VR' });
+    btnExitVR.on('click', () => {
+      threeRenderer.xr.getSession?.()?.end();
+      threeRenderer.setAnimationLoop(null);
     });
 
 
