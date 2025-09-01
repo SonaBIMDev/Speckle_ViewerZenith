@@ -85,6 +85,35 @@ async function main() {
   threeRenderer.xr.enabled = true;
   document.body.appendChild(VRButton.createButton(threeRenderer));
 
+  // 1) Pour éviter que la caméra XR parte “sous le sol”
+  threeRenderer.xr.setReferenceSpaceType?.('local-floor');
+
+  // 2) Quand la session XR démarre : forcer resize + un premier render
+  threeRenderer.xr.addEventListener?.('sessionstart', () => {
+    // a) (Important) resizer le renderer Speckle
+    // selon la version: essaye l’un des deux (le 1er suffit en général)
+    (speckleRenderer as any).resize?.();       // <— souvent dispo
+    viewer['resize']?.();                      // <— fallback si exposé
+
+    // b) désactiver la section box en VR (sinon clipping total possible)
+    try {
+      if ((sections as any)?.enabled !== false) sections.toggle(); // coupe OFF
+    } catch {}
+
+    // c) forcer un rendu immédiat au 1er frame XR
+    viewer.requestRender();
+  });
+
+  // 3) Quand la session XR se termine : remettre proprement l’état
+  threeRenderer.xr.addEventListener?.('sessionend', () => {
+    threeRenderer.setAnimationLoop(null);
+    // si tu veux réactiver la box à la sortie VR :
+    try {
+      if ((sections as any)?.enabled !== true) sections.toggle(); // coupe ON
+    } catch {}
+    viewer.requestRender();
+  });
+
     
   /*
   const urls = await UrlHelper.getResourceUrls(
@@ -374,46 +403,46 @@ async function main() {
     });
 
     // Bouton "Mode VR" (désactivé par défaut, on l'activera si WebXR est supporté)
-const btnEnterVR: any = folderVR.addButton({
-  title: 'Entrer en VR',
-  label: 'Mode VR'
-});
-
-// Handler du bouton (note: callback async pour pouvoir "await")
-btnEnterVR.on('click', async () => {
-  try {
-    // @ts-ignore
-    if (!navigator.xr) { alert('WebXR non dispo (HTTPS + Meta Quest Browser).'); return; }
-    // @ts-ignore
-    const ok = await navigator.xr.isSessionSupported?.('immersive-vr');
-    if (!ok) { alert('Immersive VR non supporté sur ce navigateur.'); return; }
-
-    // @ts-ignore
-    const session = await navigator.xr.requestSession('immersive-vr', {
-      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
+    const btnEnterVR: any = folderVR.addButton({
+      title: 'Entrer en VR',
+      label: 'Mode VR'
     });
 
-    await threeRenderer.xr.setSession(session);
+    // Handler du bouton (note: callback async pour pouvoir "await")
+    btnEnterVR.on('click', async () => {
+      try {
+        // @ts-ignore
+        if (!navigator.xr) { alert('WebXR non dispo (HTTPS + Meta Quest Browser).'); return; }
+        // @ts-ignore
+        const ok = await navigator.xr.isSessionSupported?.('immersive-vr');
+        if (!ok) { alert('Immersive VR non supporté sur ce navigateur.'); return; }
 
-    // Boucle XR : on laisse Speckle faire son rendu
-    threeRenderer.setAnimationLoop(() => {
-      viewer.requestRender();
+        // @ts-ignore
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
+        });
+
+        await threeRenderer.xr.setSession(session);
+
+        // >>> Boucle XR : rendre à CHAQUE frame XR
+        threeRenderer.setAnimationLoop(() => {
+          // Speckle n’aime pas qu’on touche directement à scene/camera.
+          // La voie propre est de demander un rendu à chaque frame :
+          viewer.requestRender();
+        });
+      } catch (e) {
+        console.error(e);
+        alert('Impossible de démarrer la session VR.');
+      }
     });
 
-    // Option : changer le titre du bouton pendant la session
-    // (Tweakpane v3: on recrée le bouton ou on en ajoute un "Quitter la VR")
-  } catch (e) {
-    console.error(e);
-    alert('Impossible de démarrer la session VR.');
-  }
-});
 
-// Bouton "Quitter la VR"
-const btnExitVR: any = folderVR.addButton({ title: 'Quitter la VR' });
-btnExitVR.on('click', () => {
-  threeRenderer.xr.getSession?.()?.end();
-  threeRenderer.setAnimationLoop(null);
-});
+    // Bouton "Quitter la VR"
+    const btnExitVR: any = folderVR.addButton({ title: 'Quitter la VR' });
+    btnExitVR.on('click', () => {
+      threeRenderer.xr.getSession?.()?.end();
+      threeRenderer.setAnimationLoop(null);
+    });
 
     //#endregion
 

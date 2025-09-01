@@ -1,0 +1,7 @@
+AuthUserFile /srv/data/web/vhosts/www.files.sona-architecture.com/.htpasswd
+AuthName "Password Protected Area"
+AuthType Basic
+
+<limit GET POST>
+require user zenith
+</limit>

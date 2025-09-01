@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build --base=./",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@speckle/viewer": "^2.20.1",
+    "@speckle/viewer": "^2.25.9",
     "tweakpane": "^3.0.8"
   },
   "devDependencies": {
