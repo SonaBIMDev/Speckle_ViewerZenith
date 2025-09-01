@@ -20,6 +20,7 @@ interface Param {
   units: number;
   value: string;
   speckletype: string;
+  internalDefinitionName?: string;
 }
 
 
@@ -117,20 +118,19 @@ async function main() {
 
  
   // Map pour indexer les TreeNode par elementId
-  const treeNodeMap = new Map<string, TreeNode>();
-  //get all generic_models
-  const tn_GenericModels: TreeNode[] = viewer
-    .getWorldTree()
-    .findAll((node: TreeNode) => {
-      if (!node.model.raw.category) return null;
-      if (!node.model.atomic) return null;
-      return node.model.raw.category.includes('Generic Models');
-    });
-
-  // Remplir la Map
-  tn_GenericModels.forEach((node) => {
-    treeNodeMap.set(node.model.raw.elementId, node);
+  const tn_GenericModels = viewer.getWorldTree().findAll(n => {
+  if (!n.model.atomic) return false;
+  const props = n.model.raw?.properties ?? {};
+  return props.builtInCategory === "OST_GenericModel";
   });
+
+  const treeNodeMap = new Map<string, any>();
+  for (const n of tn_GenericModels) {
+    const elId = n.model.raw?.properties?.elementId;
+    if (elId != null) treeNodeMap.set(String(elId), n);
+  }
+
+  
 
   //#region Pane
   const pane = new Pane({ title: 'UI', expanded: true });
@@ -312,6 +312,44 @@ async function main() {
       }
 
       if (tnFinded) {
+        const node = tnFinded;
+        const raw = node?.model?.raw ?? {};
+        const props = raw?.properties ?? {};
+
+        console.groupCollapsed(
+          "[Node trouvé]",
+          "objectId:", node?.model?.id,
+          "| elementId:", props?.elementId,
+          "| builtInCategory:", props?.builtInCategory
+        );
+
+        // Résumé utile
+        console.log("Résumé:", {
+          objectId: node?.model?.id,
+          atomic: node?.model?.atomic,
+          name: raw?.name,
+          type: raw?.type,
+          family: raw?.family,
+          level: raw?.level,
+          category: raw?.category ?? props?.category,
+          builtInCategory: props?.builtInCategory,
+          elementId: props?.elementId
+        });
+
+        // Détail complet
+        console.log("raw keys:", Object.keys(raw));
+        console.log("raw:", raw);
+        console.log("properties:", props);
+        console.log("Parameters (clés):", props?.Parameters ? Object.keys(props.Parameters) : []);
+        console.log("Instance Parameters:", raw?.["Instance Parameters"]);
+        console.log("Type Parameters:", raw?.["Type Parameters"]);
+
+        // pratique: garder une réf dans la console
+        // @ts-ignore
+        window.lastNode = node;
+
+        console.groupEnd();
+
         ZoomOnTreeNode(tnFinded);
         const id = tnFinded.model.id;
         console.log(`Id ${id} pour le node elementid ${elementid}`);
@@ -378,7 +416,8 @@ async function main() {
     //selection.selectObjects(ids);
     cameraController.setCameraView(ids, true);
     // Accéder aux propriétés brutes de l'élément sélectionné
-    const properties = targetTreeNode.model.raw;
+    const properties = targetTreeNode?.model?.raw?.properties;
+    //const properties = targetTreeNode.model.raw;
     const parameterUrl: Param | null = findParameterByName(
       properties,
       'URL_PANO'
