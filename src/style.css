@@ -35,6 +35,20 @@ html {
   margin: 0 auto; /* Centrer horizontalement */
 }
 
+.version-badge{
+  position: fixed;  /* reste visible */
+  right: 12px;
+  bottom: 40px;    /* au-dessus du logo SONA */
+  padding: 4px 10px;
+  font: 10px/1.2 system-ui, sans-serif;
+  color: #fff;
+  background: rgba(0,0,0,.65);
+  border-radius: 6px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+
 #overlay {
   position: absolute;
   top: 20px;
