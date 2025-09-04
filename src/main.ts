@@ -8,11 +8,16 @@ import {
   SectionTool,
   SectionOutlines,
   SelectionExtension,
+  WebXrViewer,
+  NearPlaneCalculation,
 } from '@speckle/viewer';
 
 //import { makeMeasurementsUI } from './MeasurementsUI'; // Interface utilisateur pour les mesures
-import { Box3 } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
+import { Box3, Quaternion, Vector3 } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
 import { Pane } from 'tweakpane'; // Bibliothèque pour créer une interface utilisateur (boutons, menus, etc.)
+import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
+import * as THREE from 'three'; // on va créer un Group et l'utiliser
+
 
 interface Param {
   id: string;
@@ -63,7 +68,7 @@ async function main() {
   const params = DefaultViewerParams;
   params.verbose = true;
   /** Create Viewer instance */
-  const viewer = new Viewer(container, params);
+  const viewer = new WebXrViewer(container, params);
   /** Initialise the viewer */
   await viewer.init();
 
@@ -71,9 +76,27 @@ async function main() {
   // @ts-ignore
   const threeRenderer = viewer.getRenderer().renderer;
 
-  /** Add the stock camera controller extension */
-  const cameraController: CameraController =
-    viewer.createExtension(CameraController);
+    //Active WebXR coté Three
+  threeRenderer.xr.enabled = true;
+  threeRenderer.xr.setReferenceSpaceType?.('local-floor'); // important
+  const scene = viewer.getRenderer().scene;
+  const modelGroup = new THREE.Group();
+  modelGroup.name = 'ModelRoot';
+  scene.add(modelGroup);
+  const controllerFactory = new XRControllerModelFactory();
+
+  for (let i = 0; i < 2; i++) { 
+    const grip = threeRenderer.xr.getControllerGrip(i); 
+    grip.add(controllerFactory.createControllerModel(grip)); 
+    scene.add(grip); 
+  }
+
+  /** Add the stock camera controller extension */ 
+  const cameraController: CameraController = 
+  viewer.createExtension(CameraController); 
+  (cameraController as any).options = { 
+  nearPlaneCalculation: NearPlaneCalculation.EMPIRIC, 
+  };
 
   /** Add the selection extension for extra interactivity */
   const selection: SelectionExtension =
@@ -423,17 +446,50 @@ async function main() {
         const ok = await navigator.xr.isSessionSupported?.('immersive-vr');
         if (!ok) { alert('Immersive VR non supporté sur ce navigateur.'); return; }
 
-        // @ts-ignore
-        const session = await navigator.xr.requestSession('immersive-vr', {
-          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
-        });
-
+        // Pas de 'layers'
+        const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
         await threeRenderer.xr.setSession(session);
 
-        // >>> Boucle XR : rendre à CHAQUE frame XR
-        threeRenderer.setAnimationLoop(() => {
-          // Speckle n’aime pas qu’on touche directement à scene/camera.
-          // La voie propre est de demander un rendu à chaque frame :
+        threeRenderer.xr.addEventListener?.('sessionstart', async () => {
+          // 0) coupe/clip OFF en VR
+          try { sections.setBox?.(null as any); (sections as any).enabled = false; } catch {}
+          try { (threeRenderer as any).localClippingEnabled = false; (threeRenderer as any).clippingPlanes = []; } catch {}
+          try { (cameraController as any).enabled = false; } catch {}
+
+          // 1) BBox scène -> point d’apparition (centre XZ + sol + hauteur yeux) en MÈTRES
+          const r = viewer.getRenderer();
+          const box = new Box3().copy(r.sceneBox); // unités courantes (souvent cm venant de Revit)
+          const s = 0.01; // cm -> m
+          const centerM = box.getCenter(new Vector3()).multiplyScalar(s);
+          const floorYM = box.min.y * s;
+          const eye = 1.65; // hauteur yeux (ajuste selon usage)
+          const spawn = new Vector3(centerM.x, floorYM + eye, centerM.z);
+
+          // 2) Orientation initiale (yaw). Si “maquette à droite” → -90° autour de Y.
+          const yawRad = -Math.PI / 2; // essaie +Math.PI/2 si sens inversé
+          const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), yawRad);
+
+          // 3) Reference space avec offset (amène le monde à toi)
+          const xrSession = threeRenderer.xr.getSession();
+          if (!xrSession) throw new Error("XR session is not available.");
+
+          const baseRef = await xrSession.requestReferenceSpace('local-floor');
+
+          const xrOffset = new XRRigidTransform(
+            { x: -spawn.x, y: -spawn.y, z: -spawn.z },
+            { x: q.x, y: q.y, z: q.z, w: q.w }
+          );
+
+          const offsetRef = baseRef.getOffsetReferenceSpace(xrOffset);
+          threeRenderer.xr.setReferenceSpace(offsetRef);
+
+          // 4) Render loop
+          threeRenderer.setAnimationLoop(() => viewer.requestRender());
+        });
+
+        threeRenderer.xr.addEventListener?.('sessionend', () => {
+          threeRenderer.setAnimationLoop(null);
+          try { (cameraController as any).enabled = true; } catch {}
           viewer.requestRender();
         });
       } catch (e) {
@@ -441,7 +497,6 @@ async function main() {
         alert('Impossible de démarrer la session VR.');
       }
     });
-
 
     // Bouton "Quitter la VR"
     const btnExitVR: any = folderVR.addButton({ title: 'Quitter la VR' });
