@@ -8,7 +8,7 @@ import {
   SectionTool,
   SectionOutlines,
   SelectionExtension,
-} from '@speckle/viewer';
+} from '@speckle/viewer'; 
 
 //import { makeMeasurementsUI } from './MeasurementsUI'; // Interface utilisateur pour les mesures
 import { Box3 } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
@@ -23,6 +23,7 @@ interface Param {
   speckletype: string;
   internalDefinitionName?: string;
 }
+
 
 // ===== App version (déclarée tout en haut) =====
 export const APP_VERSION = 'V2.0.0';
