@@ -28,6 +28,66 @@ interface Param {
   internalDefinitionName?: string;
 }
 
+// ===== App version (déclarée tout en haut) =====
+export const APP_VERSION = 'V2.0.0';
+
+// Ecrit la version dans le badge (dès que le DOM est prêt)
+const putVersion = () => {
+  const badge = document.getElementById('app-version');
+  if (badge) badge.textContent = APP_VERSION;
+};
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', putVersion, { once: true });
+} else {
+  putVersion();
+}
+
+
+// Petits helpers de type
+type Dict = Record<string, unknown>;
+function isObj(x: unknown): x is Dict { return !!x && typeof x === 'object' && !Array.isArray(x); }
+function sameName(a: string, b: string) {
+  const norm = (s: string) => String(s).toLowerCase().replace(/[\s_]/g, '');
+  return norm(a) === norm(b);
+}
+
+// Convertit n’importe quel “param-like” Speckle vers TON interface Param
+function toParam(found: unknown, fallbackName: string): Param {
+  const o = isObj(found) ? found : {};
+  const name = typeof o['name'] === 'string' ? (o['name'] as string) : fallbackName;
+
+  const valueRaw =
+    o['value'] ??
+    // parfois c’est directement la valeur si clé = "URL_PANO": "http..."
+    (typeof found !== 'object' ? found : undefined);
+
+  const internal = typeof o['internalDefinitionName'] === 'string'
+    ? (o['internalDefinitionName'] as string)
+    : undefined;
+
+  const id =
+    (typeof o['id'] === 'string' && o['id']) ? (o['id'] as string)
+    : internal && internal.trim() ? internal
+    : name;
+
+  const units =
+    (typeof o['units'] === 'number' ? (o['units'] as number) : 0);
+
+  const speckleType =
+    (typeof o['speckle_type'] === 'string' ? (o['speckle_type'] as string)
+     : typeof o['speckletype'] === 'string' ? (o['speckletype'] as string)
+     : 'Objects.Other.Parameter');
+
+  return {
+    id,
+    name,
+    units,
+    value: valueRaw != null ? String(valueRaw) : '',
+    speckletype: speckleType,
+    internalDefinitionName: internal
+  };
+}
+
 
 // Ajouter une nouvelle liste déroulante dans le Pane
 const downloadOptions = [
@@ -253,9 +313,48 @@ async function main() {
       }
 
       if (tnFinded) {
+        const node = tnFinded;
+        const raw = node?.model?.raw ?? {};
+        const props = raw?.properties ?? {};
+
+        console.groupCollapsed(
+          "[Node trouvé]",
+          "objectId:", node?.model?.id,
+          "| elementId:", props?.elementId,
+          "| builtInCategory:", props?.builtInCategory
+        );
+        
+        // Résumé utile
+        console.log("Résumé:", {
+          objectId: node?.model?.id,
+          atomic: node?.model?.atomic,
+          name: raw?.name,
+          type: raw?.type,
+          family: raw?.family,
+          level: raw?.level,
+          category: raw?.category ?? props?.category,
+          builtInCategory: props?.builtInCategory,
+          elementId: props?.elementId
+        });
+
+        // Détail complet
+        console.log("raw keys:", Object.keys(raw));
+        console.log("raw:", raw);
+        console.log("properties:", props);
+        console.log("Parameters (clés):", props?.Parameters ? Object.keys(props.Parameters) : []);
+        console.log("Instance Parameters:", raw?.["Instance Parameters"]);
+        console.log("Type Parameters:", raw?.["Type Parameters"]);
+
+        // pratique: garder une réf dans la console
+        // @ts-ignore
+        window.lastNode = node;
+
+        console.groupEnd();
+
+
         ZoomOnTreeNode(tnFinded);
-        const id = tnFinded.model.id;
-        console.log(`Id ${id} pour le node elementid ${elementid}`);
+        //const id = tnFinded.model.id;
+        //console.log(`Id ${id} pour le node elementid ${elementid}`);
       } else {
         console.log(
           `Impossible de trouver le node pour l'elementid ${elementid}`
@@ -344,54 +443,69 @@ async function main() {
           break;
       }
 
-      if (tnFinded) {
-        const node = tnFinded;
-        const raw = node?.model?.raw ?? {};
-        const props = raw?.properties ?? {};
+    if (tnFinded) {
+            /*
+            const props2 = tnFinded?.model?.raw?.properties;
+            const parameterUrl: Param | null =
+              findParameterByName(props2?.Parameters?.['Instance Parameters'], 'URL_PANO')
+              ?? findParameterByName(props2?.Parameters?.['Type Parameters'], 'URL_PANO')
+              ?? findParameterByName(props2, 'URL_PANO'); // fallback
 
-        console.groupCollapsed(
-          "[Node trouvé]",
-          "objectId:", node?.model?.id,
-          "| elementId:", props?.elementId,
-          "| builtInCategory:", props?.builtInCategory
-        );
+            if (parameterUrl) {
+              console.log('✅ URL_PANO =', parameterUrl.value);
+            } else {
+              console.warn('❌ URL_PANO introuvable');
+            }
+            */
 
-        // Résumé utile
-        console.log("Résumé:", {
-          objectId: node?.model?.id,
-          atomic: node?.model?.atomic,
-          name: raw?.name,
-          type: raw?.type,
-          family: raw?.family,
-          level: raw?.level,
-          category: raw?.category ?? props?.category,
-          builtInCategory: props?.builtInCategory,
-          elementId: props?.elementId
+            const node = tnFinded;
+            const raw = node?.model?.raw ?? {};
+            const props = raw?.properties ?? {};
+
+            console.groupCollapsed(
+              "[Node trouvé]",
+              "objectId:", node?.model?.id,
+              "| elementId:", props?.elementId,
+              "| builtInCategory:", props?.builtInCategory
+            );
+
+            // Résumé utile
+            console.log("Résumé:", {
+              objectId: node?.model?.id,
+              atomic: node?.model?.atomic,
+              name: raw?.name,
+              type: raw?.type,
+              family: raw?.family,
+              level: raw?.level,
+              category: raw?.category ?? props?.category,
+              builtInCategory: props?.builtInCategory,
+              elementId: props?.elementId
+            });
+
+            // Détail complet
+            console.log("raw keys:", Object.keys(raw));
+            console.log("raw:", raw);
+            console.log("properties:", props);
+            console.log("Parameters (clés):", props?.Parameters ? Object.keys(props.Parameters) : []);
+            console.log("Instance Parameters:", raw?.["Instance Parameters"]);
+            console.log("Type Parameters:", raw?.["Type Parameters"]);
+
+            // pratique: garder une réf dans la console
+            // @ts-ignore
+            window.lastNode = node;
+
+            console.groupEnd();
+
+            ZoomOnTreeNode(tnFinded);
+            //const id = tnFinded.model.id;
+            //console.log(`Id ${id} pour le node elementid ${elementid}`);
+          } else {
+            console.log(
+              `Impossible de trouver le node pour l'elementid ${elementid}`
+            );
+          }
         });
 
-        // Détail complet
-        console.log("raw keys:", Object.keys(raw));
-        console.log("raw:", raw);
-        console.log("properties:", props);
-        console.log("Parameters (clés):", props?.Parameters ? Object.keys(props.Parameters) : []);
-        console.log("Instance Parameters:", raw?.["Instance Parameters"]);
-        console.log("Type Parameters:", raw?.["Type Parameters"]);
-
-        // pratique: garder une réf dans la console
-        // @ts-ignore
-        window.lastNode = node;
-
-        console.groupEnd();
-
-        ZoomOnTreeNode(tnFinded);
-        const id = tnFinded.model.id;
-        console.log(`Id ${id} pour le node elementid ${elementid}`);
-      } else {
-        console.log(
-          `Impossible de trouver le node pour l'elementid ${elementid}`
-        );
-      }
-    });
 
   btnUrlDoc = folderViews
     .addButton({
@@ -534,39 +648,63 @@ async function main() {
     updateButtonWithUrl(parameterUrl);
   }
 
-  // Fonction pour rechercher récursivement une propriété dans un objet
-  function findParameterByName(
-    properties: { [key: string]: any },
-    propertyName: string
-  ): Param | null {
-    // Vérifier si la propriété "parameters" existe
-    if (properties.hasOwnProperty('parameters')) {
-      const parameters = properties['parameters'];
+  
 
-      // Parcourir chaque clé dans 'parameters'
-      for (const key in parameters) {
-        if (parameters.hasOwnProperty(key)) {
-          const param = parameters[key];
+  /** Recherche récursive d’un paramètre par nom (insensible casse/espaces/_)
+   *  Retourne un Param (ton interface) ou null.
+   *  Passe-lui en entrée typiquement: node.model.raw.properties
+   */
+  function findParameterByName(root: unknown, targetName: string): Param | null {
+    const stack: unknown[] = [root];
+    const seen = new Set<object>();
 
-          // Vérifiez si la propriété 'name' de 'param' correspond à 'propertyName'
-          if (
-            param &&
-            typeof param === 'object' &&
-            param.name === propertyName
-          ) {
-            const foundParam: Param = {
-              id: param.id || '',
-              name: param.name || '',
-              units: param.units || 0,
-              value: param.value || '',
-              speckletype: param.speckle_type || '',
-            };
-            return foundParam;
+    while (stack.length) {
+      const cur = stack.pop();
+      if (!cur) continue;
+
+      // Tableaux : parcourir
+      if (Array.isArray(cur)) {
+        for (const item of cur) {
+          if (isObj(item)) {
+            // Forme { name:'URL_PANO', value:'...' }
+            if (typeof item.name === 'string' && sameName(item.name, targetName)) {
+              return toParam(item, targetName);
+            }
+          }
+          stack.push(item);
+        }
+        continue;
+      }
+
+      if (!isObj(cur) || seen.has(cur)) continue;
+      seen.add(cur);
+
+      // Objets : inspecter chaque clé
+      for (const key in cur) {
+        const v = cur[key];
+
+        // 1) Clé directe qui matche le nom du paramètre
+        if (sameName(key, targetName)) {
+          // ex: { URL_PANO: { name:'URL_PANO', value:'...' } }
+          if (isObj(v) && ('value' in v || 'name' in v)) {
+            return toParam(v, key);
+          }
+          // ex: { URL_PANO: "http://..." }
+          if (v == null || typeof v !== 'object') {
+            return toParam(v, key);
           }
         }
+
+        // 2) Valeur de type { name:'URL_PANO', value:'...' }
+        if (isObj(v) && typeof v['name'] === 'string' && sameName(String(v['name']), targetName)) {
+          return toParam(v, String(v['name']));
+        }
+
+        // 3) Descente récursive (inclut "Parameters" → "Instance Parameters" → "Identity Data")
+        if (v && typeof v === 'object') stack.push(v);
       }
     }
-    return null; // Retourner null si la propriété recherchée n'est pas trouvée
+    return null;
   }
 
   // Fonction pour mettre à jour le bouton avec le paramètre URL_DOC trouvé
