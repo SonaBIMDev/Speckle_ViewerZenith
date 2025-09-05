@@ -10,13 +10,17 @@ import {
   SelectionExtension,
   WebXrViewer,
   NearPlaneCalculation,
+  BatchObject,
+  Extension,
+  ViewerEvent
 } from '@speckle/viewer';
 
 //import { makeMeasurementsUI } from './MeasurementsUI'; // Interface utilisateur pour les mesures
-import { Box3, Quaternion, Vector3 } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
+import { Box3, Quaternion, Vector3, Euler } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
 import { Pane } from 'tweakpane'; // Bibliothèque pour créer une interface utilisateur (boutons, menus, etc.)
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import * as THREE from 'three'; // on va créer un Group et l'utiliser
+
 
 
 interface Param {
@@ -50,6 +54,13 @@ function sameName(a: string, b: string) {
   const norm = (s: string) => String(s).toLowerCase().replace(/[\s_]/g, '');
   return norm(a) === norm(b);
 }
+
+function nextXRFrame(session: XRSession) {
+  return new Promise<void>(resolve => {
+    session.requestAnimationFrame(() => resolve());
+  });
+}
+
 
 // Convertit n’importe quel “param-like” Speckle vers TON interface Param
 function toParam(found: unknown, fallbackName: string): Param {
@@ -88,6 +99,70 @@ function toParam(found: unknown, fallbackName: string): Param {
   };
 }
 
+// Trouve le TreeNode par elementId (string ou number)
+function getNodeByElementId(viewer: Viewer, elementId: string | number): TreeNode | null {
+  const idStr = String(elementId);
+  const nodes = viewer.getWorldTree().findAll((n: TreeNode) => {
+    const props = n.model?.raw?.properties ?? {};
+    const elId = props?.elementId != null ? String(props.elementId) : null;
+    return !!elId && elId === idStr;
+  });
+  return nodes.length ? nodes[0] : null;
+}
+
+
+// Téléporte la session XR au centre de l’élément (avec un léger recul)
+async function teleportToElementId(
+  viewer: Viewer,
+  session: XRSession,
+  cameraController: CameraController,
+  elementId: string | number,
+  eye = 1.65,
+  back = 1.0,
+  yawRad = 0
+) {
+  const node = getNodeByElementId(viewer, elementId);
+  if (!node) { window.alert(`[VR] elementId introuvable: ${elementId}`); return; }
+
+  // 1) cadrer sur l’objet (sans anim)
+  cameraController.setCameraView([node.model.id], false);
+
+  // 2) attendre 1 frame pour laisser le renderer/controls se mettre à jour
+  await new Promise<void>(r => requestAnimationFrame(() => r()));
+
+  const r: any = viewer.getRenderer();
+  const controls = (cameraController as any)?.controls;
+
+  // centre de cadrage (toujours dispo via Orbit-like controls)
+  const center: Vector3 =
+    controls?.target?.clone?.() ?? new Vector3();
+
+  // caméra (peut être indisponible au tout premier frame)
+  const cam: any = r?.camera;
+  const camPos: Vector3 =
+    cam?.position?.clone?.() ?? center.clone().add(new Vector3(0, eye, back));
+
+  // direction de regard: caméra si dispo, sinon (center->camPos), sinon fallback -Z
+  const dir = new Vector3();
+  if (cam?.getWorldDirection) cam.getWorldDirection(dir);
+  if (!dir.lengthSq()) dir.copy(camPos.clone().sub(center).normalize());
+  if (!dir.lengthSq()) dir.set(0, 0, -1);
+
+  // point de spawn = position caméra reculée + hauteur des yeux
+  const spawn = camPos.addScaledVector(dir, -back);
+  spawn.y += eye;
+
+  const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), yawRad);
+
+  const baseRef = await session.requestReferenceSpace('local-floor');
+  const xrOffset = new XRRigidTransform(
+    { x: -spawn.x, y: -spawn.y, z: -spawn.z },
+    { x: q.x, y: q.y, z: q.z, w: q.w }
+  );
+  const offsetRef = baseRef.getOffsetReferenceSpace(xrOffset);
+  (viewer.getRenderer().renderer as any).xr.setReferenceSpace(offsetRef);
+}
+
 
 // Ajouter une nouvelle liste déroulante dans le Pane
 const downloadOptions = [
@@ -111,6 +186,66 @@ const downloadOptions = [
       'https://mega.nz/file/AL9U1DBY#MD1Vzb4VwfUGTycO0O65wCRKqqbYMbXRo-PNbl3qIhI',
   }, // Remplacez par l'URL réelle
 ];
+
+function applyAxisFix(viewer: Viewer): boolean {
+  try {
+    console.log('[VR] Applying Z-up → Y-up axis fix...');
+
+    const renderer = viewer.getRenderer();
+    const objects = renderer.getObjects() as BatchObject[];
+    console.log('[VR] Batch objects count =', objects?.length ?? 0);
+
+    if (!objects?.length) {
+      console.warn('[VR] No batch objects found; skip axis fix for now');
+      return false;
+    }
+
+    const origin = new Vector3().copy((viewer as any).World?.worldOrigin ?? new Vector3());
+
+    // Aligner Y (three) -> -Z (Speckle)  =>  Z-up -> Y-up
+    const quat = new Quaternion().setFromUnitVectors(
+      new Vector3(0, 1, 0),
+      new Vector3(0, 0, -1)
+    );
+    const eul = new Euler().setFromQuaternion(quat);
+
+    let count = 0;
+    for (const obj of objects) {
+      obj.transformTRS(
+        new Vector3(0, 0, 0), // pos
+        eul,                  // rot
+        undefined,            // scale
+        origin                // pivot
+      );
+      count++;
+    }
+
+    console.log(`[VR] Up-axis fix applied to ${count} objects (Z-up → Y-up).`);
+    viewer.requestRender();
+    return true;
+  } catch (err) {
+    console.error('[VR] Axis fix failed:', err);
+    return false;
+  }
+}
+
+// même quat que dans applyAxisFix (Y_three → -Z_speckle)
+const AXIS_FIX_QUAT = new Quaternion().setFromUnitVectors(
+  new Vector3(0, 1, 0),
+  new Vector3(0, 0, -1)
+);
+
+// Speckle cm (Z-up) -> Three meters (Y-up), avec même pivot que l'axis-fix
+function specklePointToThreeMeters(viewer: Viewer, locCm: {x:number;y:number;z:number}) {
+  const origin = (viewer as any).World?.worldOrigin ?? new Vector3(); // en cm
+  const p = new Vector3(locCm.x, locCm.y, locCm.z);
+  p.sub(origin);                // même pivot que transformTRS(...)
+  p.applyQuaternion(AXIS_FIX_QUAT); // même rotation (Z-up -> Y-up)
+  p.multiplyScalar(0.01);       // cm -> m
+  return p;
+}
+
+
 
 async function main() {
   let btnUrlDoc: any = null;
@@ -139,10 +274,9 @@ async function main() {
     //Active WebXR coté Three
   threeRenderer.xr.enabled = true;
   threeRenderer.xr.setReferenceSpaceType?.('local-floor'); // important
+  console.log('WebXR enabled:', threeRenderer.xr.enabled);
+  console.log('WebXR reference space type:');
   const scene = viewer.getRenderer().scene;
-  const modelGroup = new THREE.Group();
-  modelGroup.name = 'ModelRoot';
-  scene.add(modelGroup);
   const controllerFactory = new XRControllerModelFactory();
 
   for (let i = 0; i < 2; i++) { 
@@ -217,6 +351,8 @@ async function main() {
     if (elId != null) treeNodeMap.set(String(elId), n);
   }
 
+  let axisFixed = false;
+
   
 
   //#region Pane
@@ -238,7 +374,7 @@ async function main() {
 
   // === VR (Quest) — même méthodo que le reste (addFolder/addBlade/addButton) ===
   const folderVR = (pane as any).addFolder({
-    title: 'VR (Quest)',
+    title: 'VR (Quest) V2',
     expanded: true,
   });
 
@@ -514,7 +650,7 @@ async function main() {
       label: 'Vue 360', // optional
     })
     .on('click', () => {
-      // L'action de clic initial est vide, car l'URL sera mise à jour plus tard
+      // L'action de clic initial est vide, car l'URL sera mise à jour plus tarddhdhhdibdbfgdssdusqggg
     });
 
   
@@ -560,55 +696,48 @@ async function main() {
         const ok = await navigator.xr.isSessionSupported?.('immersive-vr');
         if (!ok) { alert('Immersive VR non supporté sur ce navigateur.'); return; }
 
-        // Pas de 'layers'
+        applyAxisFix(viewer);
+        await new Promise(r => setTimeout(r, 1));
+
+        // ensuite seulement, tu désactives les outils “desktop”
+        try { sections.setBox?.(null as any); (sections as any).enabled = false; } catch {}
+        try { (threeRenderer as any).localClippingEnabled = false; (threeRenderer as any).clippingPlanes = []; } catch {}
+        try { (cameraController as any).enabled = false; } catch {}
+
+        await new Promise(r => setTimeout(r, 1));
+
+        // démarrer XR
         const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
         await threeRenderer.xr.setSession(session);
 
-        threeRenderer.xr.addEventListener?.('sessionstart', async () => {
-          // 0) coupe/clip OFF en VR
-          try { sections.setBox?.(null as any); (sections as any).enabled = false; } catch {}
-          try { (threeRenderer as any).localClippingEnabled = false; (threeRenderer as any).clippingPlanes = []; } catch {}
-          try { (cameraController as any).enabled = false; } catch {}
+        // 🔢 tes coordonnées Speckle (en cm) lues dans properties.location
+        const targetSpeckle = { x: 7310.294959203268, y: -1563.358968165413, z: 4290.0 };
 
-          // 1) BBox scène -> point d’apparition (centre XZ + sol + hauteur yeux) en MÈTRES
-          const r = viewer.getRenderer();
-          const box = new Box3().copy(r.sceneBox); // unités courantes (souvent cm venant de Revit)
-          const s = 0.01; // cm -> m
-          const centerM = box.getCenter(new Vector3()).multiplyScalar(s);
-          const floorYM = box.min.y * s;
-          const eye = 1.65; // hauteur yeux (ajuste selon usage)
-          const spawn = new Vector3(centerM.x, floorYM + eye, centerM.z);
+        // ↪️ converties en coords Three (m) APRÈS axisFix
+        const targetM = specklePointToThreeMeters(viewer, targetSpeckle);
 
-          // 2) Orientation initiale (yaw). Si “maquette à droite” → -90° autour de Y.
-          const yawRad = -Math.PI / 2; // essaie +Math.PI/2 si sens inversé
-          const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), yawRad);
+        // hauteur yeux
+        const eye = 1.65;
+        // on veut que la tête soit à eye mètres au-dessus de ce point
+        const spawn = new Vector3(targetM.x, targetM.y + eye, targetM.z);
 
-          // 3) Reference space avec offset (amène le monde à toi)
-          const xrSession = threeRenderer.xr.getSession();
-          if (!xrSession) throw new Error("XR session is not available.");
+        // (optionnel) orientation initiale
+        const yawRad = 0; // mets ±Math.PI/2 si tu veux regarder dans une direction donnée
+        const q = new Quaternion().setFromAxisAngle(new Vector3(0,1,0), yawRad);
 
-          const baseRef = await xrSession.requestReferenceSpace('local-floor');
+        // ref space + offset (amène le monde à toi)
+        const baseRef = await session.requestReferenceSpace('local-floor');
+        const xrOffset = new XRRigidTransform(
+          { x: -spawn.x, y: -spawn.y, z: -spawn.z },
+          { x: q.x, y: q.y, z: q.z, w: q.w }
+        );
+        const offsetRef = baseRef.getOffsetReferenceSpace(xrOffset);
+        threeRenderer.xr.setReferenceSpace(offsetRef);
 
-          const xrOffset = new XRRigidTransform(
-            { x: -spawn.x, y: -spawn.y, z: -spawn.z },
-            { x: q.x, y: q.y, z: q.z, w: q.w }
-          );
 
-          const offsetRef = baseRef.getOffsetReferenceSpace(xrOffset);
-          threeRenderer.xr.setReferenceSpace(offsetRef);
-
-          // 4) Render loop
-          threeRenderer.setAnimationLoop(() => viewer.requestRender());
-        });
-
-        threeRenderer.xr.addEventListener?.('sessionend', () => {
-          threeRenderer.setAnimationLoop(null);
-          try { (cameraController as any).enabled = true; } catch {}
-          viewer.requestRender();
-        });
       } catch (e) {
         console.error(e);
-        alert('Impossible de démarrer la session VR.');
+        alert(`Impossible de démarrer la session VR.${(e as any)?.message ? '\n' + (e as any).message : ''}`);
       }
     });
 
@@ -646,9 +775,7 @@ async function main() {
 
     // Mettre à jour le bouton avec le nouveau paramètre URL_DOC trouvé
     updateButtonWithUrl(parameterUrl);
-  }
-
-  
+  }  
 
   /** Recherche récursive d’un paramètre par nom (insensible casse/espaces/_)
    *  Retourne un Param (ton interface) ou null.
