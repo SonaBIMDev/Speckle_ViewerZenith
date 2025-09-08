@@ -271,19 +271,17 @@ async function main() {
   // @ts-ignore
   const threeRenderer = viewer.getRenderer().renderer;
 
-    //Active WebXR coté Three
+  // @ts-ignore
+  const threeScene = viewer.getRenderer().scene;
+  if (threeScene) threeScene.background = new (await import('three')).Color(0xffffff);
+
+
+  //Active WebXR coté Three
   threeRenderer.xr.enabled = true;
   threeRenderer.xr.setReferenceSpaceType?.('local-floor'); // important
   console.log('WebXR enabled:', threeRenderer.xr.enabled);
   console.log('WebXR reference space type:');
   const scene = viewer.getRenderer().scene;
-  const controllerFactory = new XRControllerModelFactory();
-
-  for (let i = 0; i < 2; i++) { 
-    const grip = threeRenderer.xr.getControllerGrip(i); 
-    grip.add(controllerFactory.createControllerModel(grip)); 
-    scene.add(grip); 
-  }
 
   /** Add the stock camera controller extension */ 
   const cameraController: CameraController = 
@@ -291,6 +289,73 @@ async function main() {
   (cameraController as any).options = { 
   nearPlaneCalculation: NearPlaneCalculation.EMPIRIC, 
   };
+
+  // === CONTROLLERS (affichage + events) ===
+  const controllerModelFactory = new XRControllerModelFactory();
+
+  // utilitaire pour avoir un "ray" visible
+  function makeRay() {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, -1)
+    ]);
+    const line = new THREE.Line(geometry, new THREE.LineBasicMaterial());
+    line.name = 'ray';
+    line.scale.z = 10;
+    return line;
+  }
+
+  function setupController(i: number) {
+    // 1) controller = events + ray
+    const controller = threeRenderer.xr.getController(i);
+    controller.addEventListener('connected', (evt: any) => {
+      controller.userData.inputSource = evt.data; // <-- XRInputSource
+      if (!controller.getObjectByName('ray')) controller.add(makeRay());
+    });
+
+    controller.addEventListener('disconnected', () => {
+      controller.remove(controller.getObjectByName('ray') as any);
+      delete controller.userData.inputSource;
+    });
+
+    // --- Events basiques (NE PAS typer XRInputSourceEvent ici) ---
+    controller.addEventListener('selectstart', (_ev: THREE.Event) => {
+      controller.userData.isSelecting = true;
+
+      // haptique si dispo (via userData.inputSource)
+      const gp: Gamepad | undefined =
+        (controller.userData.inputSource as XRInputSource | undefined)?.gamepad;
+      (gp as any)?.hapticActuators?.[0]?.pulse?.(0.5, 40);
+
+      // TODO: ray-pick ici si tu veux
+    });
+
+    controller.addEventListener('selectend', (_ev: THREE.Event) => {
+      controller.userData.isSelecting = false;
+    });
+
+    controller.addEventListener('squeezestart', (_ev: THREE.Event) => {
+      controller.userData.isSqueezing = true;
+    });
+
+    controller.addEventListener('squeezeend', (_ev: THREE.Event) => {
+      controller.userData.isSqueezing = false;
+    });
+
+    scene.add(controller);
+
+    // 2) grip = modèle 3D du contrôleur
+    const grip = threeRenderer.xr.getControllerGrip(i);
+    grip.add(controllerModelFactory.createControllerModel(grip));
+    scene.add(grip);
+
+    return controller;
+  }
+
+  const controller0 = setupController(0);
+  const controller1 = setupController(1);
+  
+
 
   /** Add the selection extension for extra interactivity */
   const selection: SelectionExtension =
@@ -710,6 +775,91 @@ async function main() {
         const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
         await threeRenderer.xr.setSession(session);
 
+        // --- RAF WebXR natif : manettes sans setAnimationLoop ---
+        let xrAfId: number | null = null;
+
+        const moveOffset = new THREE.Vector3();     // x,z pour marcher + y pour le drone
+        const tmpDir     = new THREE.Vector3();
+        const rightVec   = new THREE.Vector3();
+
+        const SPEED_BASE = 3.0;     // m/s (plus rapide qu’avant)
+        const VERT_SPEED = 2.0;     // m/s montée/descente drone
+        const DZ         = 0.15;    // deadzone sticks
+
+        function getAxes(src: XRInputSource): { x: number; y: number } {
+          const gp = (src as any).gamepad as Gamepad | undefined;
+          const ax0 = gp?.axes?.[0] ?? 0, ax1 = gp?.axes?.[1] ?? 0;
+          const ax2 = gp?.axes?.[2] ?? 0, ax3 = gp?.axes?.[3] ?? 0;
+          // Beaucoup de profils utilisent [2,3] pour le stick secondaire ; fallback sur [0,1]
+          const x = Math.abs(ax2) + Math.abs(ax3) > Math.abs(ax0) + Math.abs(ax1) ? ax2 : ax0;
+          const y = Math.abs(ax2) + Math.abs(ax3) > Math.abs(ax0) + Math.abs(ax1) ? ax3 : ax1;
+          return { x, y };
+        }
+
+        function onXRFrame(_time: DOMHighResTimeStamp, frame: XRFrame) {
+          const s = frame.session;
+
+          for (const src of s.inputSources) {
+            if (!(src as any).gamepad) continue;
+            const { x, y } = getAxes(src);
+
+            // STICK GAUCHE = déplacement horizontal (avance/recule + strafes)
+            if (src.handedness === 'left') {
+              if (Math.hypot(x, y) > DZ) {
+                const cam = threeRenderer.xr.getCamera();
+                cam.getWorldDirection(tmpDir);
+                tmpDir.y = 0; tmpDir.normalize();
+
+                // vecteur droite (perpendiculaire horizontale)
+                rightVec.set(tmpDir.z, 0, -tmpDir.x);
+
+                const dt = 1 / 60; // approximation OK ici
+                // avant/arrière : vers le regard (push up = y ~ -1 -> avancer)
+                moveOffset.addScaledVector(tmpDir, -y * SPEED_BASE * dt);
+
+                // strafe : on INVERSE le signe pour corriger gauche/droite
+                moveOffset.addScaledVector(rightVec, -x * SPEED_BASE * dt);
+              }
+            }
+
+            // STICK DROIT (manette droite) = monter/descendre (drone)
+            if (src.handedness === 'right') {
+              if (Math.abs(y) > DZ) {
+                const dt = 1 / 60;
+                // convention gamepad: pousser le stick vers le haut => y ≈ -1 → monter
+                moveOffset.y += (-y) * VERT_SPEED * dt;
+              }
+            }
+          }
+
+          // appliquer l’offset cumulé à la referenceSpace
+          if (moveOffset.lengthSq() > 0) {
+            const base  = threeRenderer.xr.getReferenceSpace();
+            const xform = new XRRigidTransform({ x: -moveOffset.x, y: -moveOffset.y, z: -moveOffset.z });
+            const offset = base?.getOffsetReferenceSpace(xform);
+            if (offset) threeRenderer.xr.setReferenceSpace(offset);
+            moveOffset.set(0, 0, 0);
+          }
+
+          // dessiner une frame Speckle
+          viewer.requestRender();
+
+          // reboucler tant que la session est active
+          xrAfId = s.requestAnimationFrame(onXRFrame);
+        }
+
+        // démarrer la boucle XR
+        xrAfId = session.requestAnimationFrame(onXRFrame);
+
+        // cleanup quand on quitte la VR
+        session.addEventListener('end', () => {
+          if (xrAfId !== null) { try { session.cancelAnimationFrame(xrAfId); } catch {} }
+          xrAfId = null;
+          viewer.requestRender();
+        });
+
+
+
         // 🔢 tes coordonnées Speckle (en cm) lues dans properties.location
         const targetSpeckle = { x: 7310.294959203268, y: -1563.358968165413, z: 4290.0 };
 
@@ -745,7 +895,6 @@ async function main() {
     const btnExitVR: any = folderVR.addButton({ title: 'Quitter la VR' });
     btnExitVR.on('click', () => {
       threeRenderer.xr.getSession?.()?.end();
-      threeRenderer.setAnimationLoop(null);
     });
 
 
