@@ -245,10 +245,92 @@ function specklePointToThreeMeters(viewer: Viewer, locCm: {x:number;y:number;z:n
   return p;
 }
 
+// Fonction pour créer un panneau de debug visible en VR
+function createDebugPanel(): THREE.Mesh {
+  const canvas = document.createElement('canvas');
+  canvas.width = 800;
+  canvas.height = 600;
+  const ctx = canvas.getContext('2d')!;
+  
+  // Fond semi-transparent plus visible
+  ctx.fillStyle = 'rgba(0,0,0,0.9)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  // Bordure
+  ctx.strokeStyle = '#00ff00';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+  
+  ctx.fillStyle = '#00ff00';
+  ctx.font = '32px monospace';
+  ctx.fillText('DEBUG VR CONSOLE', 20, 40);
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.MeshBasicMaterial({ 
+    map: texture, 
+    transparent: true,
+    depthTest: false,
+    depthWrite: false
+  });
+  const geometry = new THREE.PlaneGeometry(1.6, 1.2);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'DEBUG_PANEL';
+  mesh.renderOrder = 999;
+  
+  return mesh;
+}
 
+// Fonction améliorée pour mettre à jour le debug
+function updateDebugPanel(debugMesh: THREE.Mesh | null, lines: string[]) {
+  if (!debugMesh) return;
+  
+  const canvas = document.createElement('canvas');
+  canvas.width = 800;
+  canvas.height = 600;
+  const ctx = canvas.getContext('2d')!;
+  
+  // Fond
+  ctx.fillStyle = 'rgba(0,0,0,0.9)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  // Bordure
+  ctx.strokeStyle = '#00ff00';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+  
+  // Titre
+  ctx.fillStyle = '#00ff00';
+  ctx.font = 'bold 28px monospace';
+  ctx.fillText('DEBUG VR CONSOLE', 20, 35);
+  
+  // Lignes de debug
+  ctx.font = '20px monospace';
+  lines.forEach((line, i) => {
+    if (i < 25) { // Limiter le nombre de lignes
+      ctx.fillText(line.substring(0, 60), 20, 70 + (i * 22)); // Limiter la longueur
+    }
+  });
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  (debugMesh.material as THREE.MeshBasicMaterial).map = texture;
+  (debugMesh.material as THREE.MeshBasicMaterial).needsUpdate = true;
+}
 
 async function main() {
   let btnUrlDoc: any = null;
+  // --- UI VR: état/menu ---
+  let vrMenu: THREE.Mesh | null = null;
+  let vrMenuNeedsAttach = false;  // pour l'ajouter à la scène après session
+  let vrMenuVisible = false;
+
+  // mémorisation de l'état précédent des boutons pour détecter l'appui (front montant)
+  let prevRightA = false;
+  let prevRightB = false;
+  let loggedRightMapping = false; 
+  let debugText: THREE.Mesh | null = null; // Pour afficher du texte de debug en VR
+  let debugInfo = ''; // Information de debug
+
 
    // Afficher le spinner au chargement initial
    const spinnerContainer = document.getElementById("spinner-container");
@@ -304,58 +386,153 @@ async function main() {
     line.scale.z = 10;
     return line;
   }
+  
+  // Crée un panneau 2D (plane) avec une texture canvas (titre + 3 items fictifs)
+  function createVrMenuPlane(): THREE.Mesh {
+    const w = 2.0;   // Plus large pour être plus visible
+    const h = 1.2;   // Plus haut
 
-  function setupController(i: number) {
-    // 1) controller = events + ray
-    const controller = threeRenderer.xr.getController(i);
-    controller.addEventListener('connected', (evt: any) => {
-      controller.userData.inputSource = evt.data; // <-- XRInputSource
-      if (!controller.getObjectByName('ray')) controller.add(makeRay());
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 768;
+    const ctx = canvas.getContext('2d')!;
+
+    // Fond avec couleur très contrastée
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Bordure très visible
+    ctx.strokeStyle = '#ff6b00'; // Orange vif
+    ctx.lineWidth = 12;
+    ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+    
+    // Header très contrasté
+    ctx.fillStyle = '#ff6b00';
+    ctx.fillRect(20, 20, canvas.width - 40, 100);
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 52px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('MENU VR ACTIF', canvas.width / 2, 85);
+
+    // Reset text align
+    ctx.textAlign = 'left';
+
+    // Items avec couleurs très contrastées
+    const items = ['Téléportation', 'Paramètres', 'Retour Desktop'];
+    items.forEach((label, i) => {
+      const y = 160 + i * 140;
+      // Bouton avec gradient
+      const gradient = ctx.createLinearGradient(50, y, canvas.width - 50, y + 100);
+      gradient.addColorStop(0, '#0066cc');
+      gradient.addColorStop(1, '#004499');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(50, y, canvas.width - 100, 100);
+      
+      // Bordure du bouton
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(50, y, canvas.width - 100, 100);
+      
+      // Texte blanc
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 42px Arial';
+      ctx.fillText(label, 80, y + 65);
     });
 
-    controller.addEventListener('disconnected', () => {
-      controller.remove(controller.getObjectByName('ray') as any);
-      delete controller.userData.inputSource;
+    // Indicateur d'état en bas
+    ctx.fillStyle = '#00ff00';
+    ctx.font = 'bold 32px Arial';
+    ctx.fillText('MENU VISIBLE - Appuyez A/B pour fermer', 50, canvas.height - 30);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.anisotropy = 16;
+    tex.needsUpdate = true;
+
+    const mat = new THREE.MeshBasicMaterial({ 
+      map: tex, 
+      transparent: true,
+      side: THREE.DoubleSide,
+      depthTest: false,  // Toujours visible
+      depthWrite: false
     });
-
-    // --- Events basiques (NE PAS typer XRInputSourceEvent ici) ---
-    controller.addEventListener('selectstart', (_ev: THREE.Event) => {
-      controller.userData.isSelecting = true;
-
-      // haptique si dispo (via userData.inputSource)
-      const gp: Gamepad | undefined =
-        (controller.userData.inputSource as XRInputSource | undefined)?.gamepad;
-      (gp as any)?.hapticActuators?.[0]?.pulse?.(0.5, 40);
-
-      // TODO: ray-pick ici si tu veux
-    });
-
-    controller.addEventListener('selectend', (_ev: THREE.Event) => {
-      controller.userData.isSelecting = false;
-    });
-
-    controller.addEventListener('squeezestart', (_ev: THREE.Event) => {
-      controller.userData.isSqueezing = true;
-    });
-
-    controller.addEventListener('squeezeend', (_ev: THREE.Event) => {
-      controller.userData.isSqueezing = false;
-    });
-
-    scene.add(controller);
-
-    // 2) grip = modèle 3D du contrôleur
-    const grip = threeRenderer.xr.getControllerGrip(i);
-    grip.add(controllerModelFactory.createControllerModel(grip));
-    scene.add(grip);
-
-    return controller;
+    const geo = new THREE.PlaneGeometry(w, h);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'VR_MENU_PANEL';
+    mesh.renderOrder = 1000; // S'assurer qu'il se rend en dernier
+    
+    return mesh;
   }
 
-  const controller0 = setupController(0);
-  const controller1 = setupController(1);
-  
+  function positionMenuInFrontOfUser(menu: THREE.Mesh, renderer: any): boolean {
+    try {
+      if (!menu || !renderer.xr.isPresenting) return false;
+      
+      const camera = renderer.xr.getCamera();
+      if (!camera) return false;
 
+      // Position de la caméra
+      const cameraPos = new THREE.Vector3();
+      camera.getWorldPosition(cameraPos);
+
+      // Direction de regard
+      const forward = new THREE.Vector3();
+      camera.getWorldDirection(forward);
+
+      // Position du menu : 1.5m devant, légèrement en dessous du regard
+      const menuPos = cameraPos.clone()
+        .addScaledVector(forward, 1.5)  // 1.5m devant
+        .add(new THREE.Vector3(0, -0.2, 0)); // 20cm plus bas
+
+      menu.position.copy(menuPos);
+      
+      // Faire face à l'utilisateur
+      menu.lookAt(cameraPos);
+      
+      return true;
+    } catch (error) {
+      console.error('Erreur lors du positionnement du menu:', error);
+      return false;
+    }
+  }
+
+  // Système de détection des boutons amélioré
+  class VRControllerManager {
+    private previousStates = new Map<XRInputSource, Map<number, boolean>>();
+    
+    getButtonStates(inputSource: XRInputSource): { pressed: number[], justPressed: number[] } {
+      const gamepad = (inputSource as any).gamepad as Gamepad | undefined;
+      if (!gamepad?.buttons) return { pressed: [], justPressed: [] };
+      
+      const currentPressed: number[] = [];
+      const justPressed: number[] = [];
+      
+      // État précédent pour cette source
+      if (!this.previousStates.has(inputSource)) {
+        this.previousStates.set(inputSource, new Map());
+      }
+      const prevState = this.previousStates.get(inputSource)!;
+      
+      // Vérifier chaque bouton
+      for (let i = 0; i < gamepad.buttons.length; i++) {
+        const isPressed = gamepad.buttons[i].pressed;
+        const wasPressed = prevState.get(i) || false;
+        
+        if (isPressed) currentPressed.push(i);
+        if (isPressed && !wasPressed) justPressed.push(i);
+        
+        prevState.set(i, isPressed);
+      }
+      
+      return { pressed: currentPressed, justPressed };
+    }
+    
+    cleanup() {
+      this.previousStates.clear();
+    }
+  }
+
+  // Dans votre fonction principale, remplacez la section VR par :
+  const controllerManager = new VRControllerManager();
 
   /** Add the selection extension for extra interactivity */
   const selection: SelectionExtension =
@@ -775,6 +952,26 @@ async function main() {
         const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
         await threeRenderer.xr.setSession(session);
 
+        // Créer le panel de debug
+        debugText = createDebugPanel();
+        scene.add(debugText);
+
+        // Prépare/ajoute le menu dans la scène une seule fois
+        if (!vrMenu) {
+          vrMenu = createVrMenuPlane();
+          vrMenuNeedsAttach = true;
+        }
+        if (vrMenuNeedsAttach) {
+          scene.add(vrMenu!);
+          vrMenuNeedsAttach = false;
+        }
+        vrMenuVisible = false;
+        if (vrMenu) vrMenu.visible = false;
+
+        // reset des états boutons à l’entrée de session
+        prevRightA = prevRightB = false;
+
+
         // --- RAF WebXR natif : manettes sans setAnimationLoop ---
         let xrAfId: number | null = null;
 
@@ -795,69 +992,132 @@ async function main() {
           const y = Math.abs(ax2) + Math.abs(ax3) > Math.abs(ax0) + Math.abs(ax1) ? ax3 : ax1;
           return { x, y };
         }
+        
 
         function onXRFrame(_time: DOMHighResTimeStamp, frame: XRFrame) {
-          const s = frame.session;
-
-          for (const src of s.inputSources) {
-            if (!(src as any).gamepad) continue;
-            const { x, y } = getAxes(src);
-
-            // STICK GAUCHE = déplacement horizontal (avance/recule + strafes)
-            if (src.handedness === 'left') {
-              if (Math.hypot(x, y) > DZ) {
-                const cam = threeRenderer.xr.getCamera();
-                cam.getWorldDirection(tmpDir);
-                tmpDir.y = 0; tmpDir.normalize();
-
-                // vecteur droite (perpendiculaire horizontale)
-                rightVec.set(tmpDir.z, 0, -tmpDir.x);
-
-                const dt = 1 / 60; // approximation OK ici
-                // avant/arrière : vers le regard (push up = y ~ -1 -> avancer)
-                moveOffset.addScaledVector(tmpDir, -y * SPEED_BASE * dt);
-
-                // strafe : on INVERSE le signe pour corriger gauche/droite
-                moveOffset.addScaledVector(rightVec, -x * SPEED_BASE * dt);
-              }
+          const session = frame.session;
+          
+          let debugLines: string[] = [];
+          debugLines.push(`=== DEBUG VR FRAME ${Math.floor(_time)} ===`);
+          debugLines.push(`Session active: ${session ? 'OUI' : 'NON'}`);
+          debugLines.push(`InputSources: ${session.inputSources.length}`);
+          
+          let menuToggleRequested = false;
+          
+          // Analyser chaque contrôleur
+          for (const [index, inputSource] of session.inputSources.entries()) {
+            const hand = inputSource.handedness || 'unknown';
+            debugLines.push(`--- Contrôleur ${index} (${hand}) ---`);
+            
+            const { pressed, justPressed } = controllerManager.getButtonStates(inputSource);
+            
+            debugLines.push(`Boutons pressés: [${pressed.join(', ')}]`);
+            debugLines.push(`Nouveaux appuis: [${justPressed.join(', ')}]`);
+            
+            // Si n'importe quel bouton est pressé pour la première fois, toggle le menu
+            if (justPressed.length > 0) {
+              menuToggleRequested = true;
+              debugLines.push(`>>> TOGGLE MENU DEMANDÉ <<<`);
             }
-
-            // STICK DROIT (manette droite) = monter/descendre (drone)
-            if (src.handedness === 'right') {
-              if (Math.abs(y) > DZ) {
-                const dt = 1 / 60;
-                // convention gamepad: pousser le stick vers le haut => y ≈ -1 → monter
-                moveOffset.y += (-y) * VERT_SPEED * dt;
+            
+            // Info sur le gamepad
+            const gamepad = (inputSource as any).gamepad as Gamepad | undefined;
+            if (gamepad) {
+              debugLines.push(`Gamepad: ${gamepad.buttons?.length || 0} boutons`);
+              if (gamepad.axes) {
+                const axes = Array.from(gamepad.axes).map(a => a.toFixed(2));
+                debugLines.push(`Axes: [${axes.join(', ')}]`);
               }
+            } else {
+              debugLines.push(`Aucun gamepad détecté`);
             }
           }
-
-          // appliquer l’offset cumulé à la referenceSpace
-          if (moveOffset.lengthSq() > 0) {
-            const base  = threeRenderer.xr.getReferenceSpace();
-            const xform = new XRRigidTransform({ x: -moveOffset.x, y: -moveOffset.y, z: -moveOffset.z });
-            const offset = base?.getOffsetReferenceSpace(xform);
-            if (offset) threeRenderer.xr.setReferenceSpace(offset);
-            moveOffset.set(0, 0, 0);
+          
+          // Gestion du menu
+          if (menuToggleRequested) {
+            vrMenuVisible = !vrMenuVisible;
+            debugLines.push(`MENU ${vrMenuVisible ? 'ACTIVÉ' : 'DÉSACTIVÉ'}`);
+            
+            // Créer le menu s'il n'existe pas
+            if (!vrMenu) {
+              vrMenu = createVrMenuPlane();
+              scene.add(vrMenu);
+              debugLines.push('Menu créé et ajouté à la scène');
+            }
+            
+            if (vrMenu) {
+              vrMenu.visible = vrMenuVisible;
+              debugLines.push(`Menu.visible = ${vrMenu.visible}`);
+            }
           }
-
-          // dessiner une frame Speckle
+          
+          debugLines.push(`--- État Menu ---`);
+          debugLines.push(`Menu existe: ${vrMenu ? 'OUI' : 'NON'}`);
+          debugLines.push(`Menu visible: ${vrMenuVisible}`);
+          debugLines.push(`Menu dans scène: ${vrMenu && scene.children.includes(vrMenu) ? 'OUI' : 'NON'}`);
+          
+          // Positionner le menu
+          if (vrMenu && vrMenuVisible) {
+            const positioned = positionMenuInFrontOfUser(vrMenu, threeRenderer);
+            debugLines.push(`Menu positionné: ${positioned ? 'OUI' : 'NON'}`);
+          }
+          
+          // Positionner le debug panel
+          if (debugText) {
+            const camera = threeRenderer.xr.getCamera();
+            if (camera) {
+              const cameraPos = new THREE.Vector3();
+              camera.getWorldPosition(cameraPos);
+              
+              const forward = new THREE.Vector3();
+              camera.getWorldDirection(forward);
+              
+              const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+              
+              const debugPos = cameraPos.clone()
+                .addScaledVector(forward, 1.0)
+                .addScaledVector(right, -0.8)
+                .addScaledVector(new THREE.Vector3(0, 1, 0), -0.4);
+              
+              debugText.position.copy(debugPos);
+              debugText.lookAt(cameraPos);
+            }
+          }
+          
+          // Mettre à jour l'affichage debug
+          updateDebugPanel(debugText, debugLines);
+          
+          // Gestion du mouvement (votre code existant)
+          // ... code de déplacement ...
+          
           viewer.requestRender();
-
-          // reboucler tant que la session est active
-          xrAfId = s.requestAnimationFrame(onXRFrame);
+          xrAfId = session.requestAnimationFrame(onXRFrame);
         }
 
         // démarrer la boucle XR
         xrAfId = session.requestAnimationFrame(onXRFrame);
 
-        // cleanup quand on quitte la VR
+
+        // N'oubliez pas de nettoyer les états quand la session se ferme
         session.addEventListener('end', () => {
-          if (xrAfId !== null) { try { session.cancelAnimationFrame(xrAfId); } catch {} }
+          controllerManager.cleanup();
+          if (xrAfId !== null) {
+            try { session.cancelAnimationFrame(xrAfId); } catch {}
+          }
           xrAfId = null;
+          
+          // Nettoyer les objets VR de la scène
+          if (vrMenu) {
+            scene.remove(vrMenu);
+            vrMenu = null;
+          }
+          if (debugText) {
+            scene.remove(debugText);
+            debugText = null;
+          }
+          
           viewer.requestRender();
         });
-
 
 
         // 🔢 tes coordonnées Speckle (en cm) lues dans properties.location
