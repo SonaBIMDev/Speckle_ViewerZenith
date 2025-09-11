@@ -18,7 +18,6 @@ import {
 //import { makeMeasurementsUI } from './MeasurementsUI'; // Interface utilisateur pour les mesures
 import { Box3, Quaternion, Vector3, Euler } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
 import { Pane } from 'tweakpane'; // Bibliothèque pour créer une interface utilisateur (boutons, menus, etc.)
-import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import * as THREE from 'three'; // on va créer un Group et l'utiliser
 
 
@@ -54,13 +53,6 @@ function sameName(a: string, b: string) {
   const norm = (s: string) => String(s).toLowerCase().replace(/[\s_]/g, '');
   return norm(a) === norm(b);
 }
-
-function nextXRFrame(session: XRSession) {
-  return new Promise<void>(resolve => {
-    session.requestAnimationFrame(() => resolve());
-  });
-}
-
 
 // Convertit n’importe quel “param-like” Speckle vers TON interface Param
 function toParam(found: unknown, fallbackName: string): Param {
@@ -98,71 +90,6 @@ function toParam(found: unknown, fallbackName: string): Param {
     internalDefinitionName: internal
   };
 }
-
-// Trouve le TreeNode par elementId (string ou number)
-function getNodeByElementId(viewer: Viewer, elementId: string | number): TreeNode | null {
-  const idStr = String(elementId);
-  const nodes = viewer.getWorldTree().findAll((n: TreeNode) => {
-    const props = n.model?.raw?.properties ?? {};
-    const elId = props?.elementId != null ? String(props.elementId) : null;
-    return !!elId && elId === idStr;
-  });
-  return nodes.length ? nodes[0] : null;
-}
-
-
-// Téléporte la session XR au centre de l’élément (avec un léger recul)
-async function teleportToElementId(
-  viewer: Viewer,
-  session: XRSession,
-  cameraController: CameraController,
-  elementId: string | number,
-  eye = 1.65,
-  back = 1.0,
-  yawRad = 0
-) {
-  const node = getNodeByElementId(viewer, elementId);
-  if (!node) { window.alert(`[VR] elementId introuvable: ${elementId}`); return; }
-
-  // 1) cadrer sur l’objet (sans anim)
-  cameraController.setCameraView([node.model.id], false);
-
-  // 2) attendre 1 frame pour laisser le renderer/controls se mettre à jour
-  await new Promise<void>(r => requestAnimationFrame(() => r()));
-
-  const r: any = viewer.getRenderer();
-  const controls = (cameraController as any)?.controls;
-
-  // centre de cadrage (toujours dispo via Orbit-like controls)
-  const center: Vector3 =
-    controls?.target?.clone?.() ?? new Vector3();
-
-  // caméra (peut être indisponible au tout premier frame)
-  const cam: any = r?.camera;
-  const camPos: Vector3 =
-    cam?.position?.clone?.() ?? center.clone().add(new Vector3(0, eye, back));
-
-  // direction de regard: caméra si dispo, sinon (center->camPos), sinon fallback -Z
-  const dir = new Vector3();
-  if (cam?.getWorldDirection) cam.getWorldDirection(dir);
-  if (!dir.lengthSq()) dir.copy(camPos.clone().sub(center).normalize());
-  if (!dir.lengthSq()) dir.set(0, 0, -1);
-
-  // point de spawn = position caméra reculée + hauteur des yeux
-  const spawn = camPos.addScaledVector(dir, -back);
-  spawn.y += eye;
-
-  const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), yawRad);
-
-  const baseRef = await session.requestReferenceSpace('local-floor');
-  const xrOffset = new XRRigidTransform(
-    { x: -spawn.x, y: -spawn.y, z: -spawn.z },
-    { x: q.x, y: q.y, z: q.z, w: q.w }
-  );
-  const offsetRef = baseRef.getOffsetReferenceSpace(xrOffset);
-  (viewer.getRenderer().renderer as any).xr.setReferenceSpace(offsetRef);
-}
-
 
 // Ajouter une nouvelle liste déroulante dans le Pane
 const downloadOptions = [
@@ -327,10 +254,7 @@ async function main() {
   // mémorisation de l'état précédent des boutons pour détecter l'appui (front montant)
   let prevRightA = false;
   let prevRightB = false;
-  let loggedRightMapping = false; 
   let debugText: THREE.Mesh | null = null; // Pour afficher du texte de debug en VR
-  let debugInfo = ''; // Information de debug
-
 
    // Afficher le spinner au chargement initial
    const spinnerContainer = document.getElementById("spinner-container");
@@ -371,21 +295,6 @@ async function main() {
   (cameraController as any).options = { 
   nearPlaneCalculation: NearPlaneCalculation.EMPIRIC, 
   };
-
-  // === CONTROLLERS (affichage + events) ===
-  const controllerModelFactory = new XRControllerModelFactory();
-
-  // utilitaire pour avoir un "ray" visible
-  function makeRay() {
-    const geometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, -1)
-    ]);
-    const line = new THREE.Line(geometry, new THREE.LineBasicMaterial());
-    line.name = 'ray';
-    line.scale.z = 10;
-    return line;
-  }
   
   // Crée un panneau 2D (plane) avec une texture canvas (titre + 3 items fictifs)
   function createVrMenuPlane(): THREE.Mesh {
@@ -463,36 +372,25 @@ async function main() {
     return mesh;
   }
 
-  function positionMenuInFrontOfUser(menu: THREE.Mesh, renderer: any): boolean {
-    try {
-      if (!menu || !renderer.xr.isPresenting) return false;
-      
-      const camera = renderer.xr.getCamera();
-      if (!camera) return false;
+  // Distance/offsets centralisés
+  const MENU_DISTANCE = 1.8;     // 1.8 m devant (au lieu de 1.0/1.5)
+  const MENU_Y_OFFSET = +0.18;   // +18 cm (légèrement AU-DESSUS du regard)
 
-      // Position de la caméra
-      const cameraPos = new THREE.Vector3();
-      camera.getWorldPosition(cameraPos);
+  function positionMenuInFrontOfUser(menu: THREE.Object3D, renderer: any): boolean {
+    if (!menu || !renderer.xr.isPresenting) return false;
+    const cam = renderer.xr.getCamera();
+    if (!cam) return false;
 
-      // Direction de regard
-      const forward = new THREE.Vector3();
-      camera.getWorldDirection(forward);
+    const camPos = new THREE.Vector3(); cam.getWorldPosition(camPos);
+    const fwd = new THREE.Vector3();    cam.getWorldDirection(fwd);
 
-      // Position du menu : 1.5m devant, légèrement en dessous du regard
-      const menuPos = cameraPos.clone()
-        .addScaledVector(forward, 1.5)  // 1.5m devant
-        .add(new THREE.Vector3(0, -0.2, 0)); // 20cm plus bas
+    // 1) place à une bonne distance + un léger lift pour éviter de "regarder vers le bas"
+    const pos = camPos.clone().addScaledVector(fwd, MENU_DISTANCE);
+    pos.y += MENU_Y_OFFSET;
 
-      menu.position.copy(menuPos);
-      
-      // Faire face à l'utilisateur
-      menu.lookAt(cameraPos);
-      
-      return true;
-    } catch (error) {
-      console.error('Erreur lors du positionnement du menu:', error);
-      return false;
-    }
+    menu.position.copy(pos);
+    menu.lookAt(camPos);
+    return true;
   }
 
   // Système de détection des boutons amélioré
@@ -592,10 +490,6 @@ async function main() {
     const elId = n.model.raw?.properties?.elementId;
     if (elId != null) treeNodeMap.set(String(elId), n);
   }
-
-  let axisFixed = false;
-
-  
 
   //#region Pane
   const pane = new Pane({ title: 'UI', expanded: true });
@@ -952,6 +846,22 @@ async function main() {
         const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
         await threeRenderer.xr.setSession(session);
 
+        function setAllCamerasClipping(renderer: any, near = 0.02, far = 2000) {
+        // caméra XR (est un "ArrayCamera" contenant .cameras)
+        const xrCam:any = renderer.xr.getCamera();
+        const list: THREE.Camera[] =
+          (xrCam && xrCam.cameras && Array.isArray(xrCam.cameras)) ? xrCam.cameras : (xrCam ? [xrCam] : []);
+        for (const c of list) {
+          if ('near' in c) (c as any).near = near;
+          if ('far' in c)  (c as any).far = far;
+          (c as any).updateProjectionMatrix?.();
+        }
+      }
+
+      // juste après setSession(...)
+      setAllCamerasClipping(threeRenderer, 0.002, 500);
+
+
         // Créer le panel de debug
         debugText = createDebugPanel();
         scene.add(debugText);
@@ -983,6 +893,8 @@ async function main() {
         const VERT_SPEED = 2.0;     // m/s montée/descente drone
         const DZ         = 0.15;    // deadzone sticks
 
+        const AB_INDICES = [4, 5];
+
         function getAxes(src: XRInputSource): { x: number; y: number } {
           const gp = (src as any).gamepad as Gamepad | undefined;
           const ax0 = gp?.axes?.[0] ?? 0, ax1 = gp?.axes?.[1] ?? 0;
@@ -1003,90 +915,7 @@ async function main() {
           debugLines.push(`InputSources: ${session.inputSources.length}`);
           
           let menuToggleRequested = false;
-          
-          // Analyser chaque contrôleur
-          for (const [index, inputSource] of session.inputSources.entries()) {
-            const hand = inputSource.handedness || 'unknown';
-            debugLines.push(`--- Contrôleur ${index} (${hand}) ---`);
-            
-            const { pressed, justPressed } = controllerManager.getButtonStates(inputSource);
-            
-            debugLines.push(`Boutons pressés: [${pressed.join(', ')}]`);
-            debugLines.push(`Nouveaux appuis: [${justPressed.join(', ')}]`);
-            
-            // Si n'importe quel bouton est pressé pour la première fois, toggle le menu
-            if (justPressed.length > 0) {
-              menuToggleRequested = true;
-              debugLines.push(`>>> TOGGLE MENU DEMANDÉ <<<`);
-            }
-            
-            // Info sur le gamepad
-            const gamepad = (inputSource as any).gamepad as Gamepad | undefined;
-            if (gamepad) {
-              debugLines.push(`Gamepad: ${gamepad.buttons?.length || 0} boutons`);
-              if (gamepad.axes) {
-                const axes = Array.from(gamepad.axes).map(a => a.toFixed(2));
-                debugLines.push(`Axes: [${axes.join(', ')}]`);
-              }
-            } else {
-              debugLines.push(`Aucun gamepad détecté`);
-            }
-          }
-          
-          // Gestion du menu
-          if (menuToggleRequested) {
-            vrMenuVisible = !vrMenuVisible;
-            debugLines.push(`MENU ${vrMenuVisible ? 'ACTIVÉ' : 'DÉSACTIVÉ'}`);
-            
-            // Créer le menu s'il n'existe pas
-            if (!vrMenu) {
-              vrMenu = createVrMenuPlane();
-              scene.add(vrMenu);
-              debugLines.push('Menu créé et ajouté à la scène');
-            }
-            
-            if (vrMenu) {
-              vrMenu.visible = vrMenuVisible;
-              debugLines.push(`Menu.visible = ${vrMenu.visible}`);
-            }
-          }
-          
-          debugLines.push(`--- État Menu ---`);
-          debugLines.push(`Menu existe: ${vrMenu ? 'OUI' : 'NON'}`);
-          debugLines.push(`Menu visible: ${vrMenuVisible}`);
-          debugLines.push(`Menu dans scène: ${vrMenu && scene.children.includes(vrMenu) ? 'OUI' : 'NON'}`);
-          
-          // Positionner le menu
-          if (vrMenu && vrMenuVisible) {
-            const positioned = positionMenuInFrontOfUser(vrMenu, threeRenderer);
-            debugLines.push(`Menu positionné: ${positioned ? 'OUI' : 'NON'}`);
-          }
-          
-          // Positionner le debug panel
-          if (debugText) {
-            const camera = threeRenderer.xr.getCamera();
-            if (camera) {
-              const cameraPos = new THREE.Vector3();
-              camera.getWorldPosition(cameraPos);
-              
-              const forward = new THREE.Vector3();
-              camera.getWorldDirection(forward);
-              
-              const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
-              
-              const debugPos = cameraPos.clone()
-                .addScaledVector(forward, 1.0)
-                .addScaledVector(right, -0.8)
-                .addScaledVector(new THREE.Vector3(0, 1, 0), -0.4);
-              
-              debugText.position.copy(debugPos);
-              debugText.lookAt(cameraPos);
-            }
-          }
-          
-          // Mettre à jour l'affichage debug
-          updateDebugPanel(debugText, debugLines);
-          
+
           for (const [i, src] of session.inputSources.entries()) {
             debugLines.push(`Source ${i}: ${src.handedness || 'none'}`);
             
@@ -1135,6 +964,85 @@ async function main() {
             if (offset) threeRenderer.xr.setReferenceSpace(offset);
             moveOffset.set(0, 0, 0);
           }
+          
+          // Analyser chaque contrôleur
+          for (const [index, inputSource] of session.inputSources.entries()) {
+            const hand = inputSource.handedness || 'unknown';
+            debugLines.push(`--- Contrôleur ${index} (${hand}) ---`);
+            
+            const { pressed, justPressed } = controllerManager.getButtonStates(inputSource);
+            
+            debugLines.push(`Boutons pressés: [${pressed.join(', ')}]`);
+            debugLines.push(`Nouveaux appuis: [${justPressed.join(', ')}]`);
+            
+            // Si n'importe quel bouton est pressé pour la première fois, toggle le menu
+            if (hand === 'right') {
+              if (justPressed.some(i => AB_INDICES.includes(i))) {
+                menuToggleRequested = true;
+                debugLines.push(`>>> TOGGLE via A/B (indices ${justPressed.join(',')}) <<<`);
+              }
+            }
+            
+            // Info sur le gamepad
+            const gamepad = (inputSource as any).gamepad as Gamepad | undefined;
+            if (gamepad) {
+              debugLines.push(`Gamepad: ${gamepad.buttons?.length || 0} boutons`);
+              if (gamepad.axes) {
+                const axes = Array.from(gamepad.axes).map(a => a.toFixed(2));
+                debugLines.push(`Axes: [${axes.join(', ')}]`);
+              }
+            } else {
+              debugLines.push(`Aucun gamepad détecté`);
+            }
+          }
+          
+          // Gestion du menu
+          if (menuToggleRequested) {
+            vrMenuVisible = !vrMenuVisible;
+            debugLines.push(`MENU ${vrMenuVisible ? 'ACTIVÉ' : 'DÉSACTIVÉ'}`);
+            
+            // Créer le menu s'il n'existe pas
+            if (!vrMenu) {
+              vrMenu = createVrMenuPlane();
+              scene.add(vrMenu);
+              debugLines.push('Menu créé et ajouté à la scène');
+            }
+            
+            if (vrMenu) {
+              vrMenu.visible = vrMenuVisible;
+              debugLines.push(`Menu.visible = ${vrMenu.visible}`);
+            }
+          }
+          
+          debugLines.push(`--- État Menu ---`);
+          debugLines.push(`Menu existe: ${vrMenu ? 'OUI' : 'NON'}`);
+          debugLines.push(`Menu visible: ${vrMenuVisible}`);
+          debugLines.push(`Menu dans scène: ${vrMenu && scene.children.includes(vrMenu) ? 'OUI' : 'NON'}`);
+          
+          // Positionner le menu
+          if (vrMenu && vrMenuVisible) {
+            const positioned = positionMenuInFrontOfUser(vrMenu, threeRenderer);
+            debugLines.push(`Menu positionné: ${positioned ? 'OUI' : 'NON'}`);
+          }
+          
+          // Positionner le debug panel
+          if (debugText) {
+            const cam = threeRenderer.xr.getCamera();
+            if (cam) {
+              const camPos = new THREE.Vector3(); cam.getWorldPosition(camPos);
+              const fwd   = new THREE.Vector3();  cam.getWorldDirection(fwd);
+              // const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0,1,0)).normalize();
+
+              const p = camPos.clone().addScaledVector(fwd, MENU_DISTANCE);
+              p.y += MENU_Y_OFFSET;
+
+              debugText.position.copy(p);
+              debugText.lookAt(camPos);
+            }
+          }
+          
+          // Mettre à jour l'affichage debug
+          updateDebugPanel(debugText, debugLines);
           
           viewer.requestRender();
           xrAfId = session.requestAnimationFrame(onXRFrame);
