@@ -1087,8 +1087,54 @@ async function main() {
           // Mettre à jour l'affichage debug
           updateDebugPanel(debugText, debugLines);
           
-          // Gestion du mouvement (votre code existant)
-          // ... code de déplacement ...
+          for (const [i, src] of session.inputSources.entries()) {
+            debugLines.push(`Source ${i}: ${src.handedness || 'none'}`);
+            
+            if (!(src as any).gamepad) {
+              debugLines.push(`  No gamepad`);
+              continue;
+            }
+            
+            const gp = (src as any).gamepad as Gamepad;
+            debugLines.push(`  Gamepad: ${gp.buttons?.length || 0} buttons`);
+            
+            // Déplacement (stick gauche)
+            if (src.handedness === 'left') {
+              const { x, y } = getAxes(src);
+              if (Math.hypot(x, y) > DZ) {
+                const cam = threeRenderer.xr.getCamera();
+                cam.getWorldDirection(tmpDir);
+                tmpDir.y = 0; tmpDir.normalize();
+                rightVec.set(tmpDir.z, 0, -tmpDir.x);
+
+                const dt = 1 / 60;
+                moveOffset.addScaledVector(tmpDir, -y * SPEED_BASE * dt);
+                moveOffset.addScaledVector(rightVec, -x * SPEED_BASE * dt);
+              }
+            }
+            
+            // Montée/descente (stick droit)
+            if (src.handedness === 'right') {
+              const { x, y } = getAxes(src);
+              if (Math.abs(y) > DZ) {
+                const dt = 1 / 60;
+                moveOffset.y += (-y) * VERT_SPEED * dt;
+              }
+            }
+          }
+
+          // Déplacement
+          if (moveOffset.lengthSq() > 0) {
+            const base = threeRenderer.xr.getReferenceSpace();
+            const xform = new XRRigidTransform({
+              x: -moveOffset.x,
+              y: -moveOffset.y,
+              z: -moveOffset.z
+            });
+            const offset = base?.getOffsetReferenceSpace(xform);
+            if (offset) threeRenderer.xr.setReferenceSpace(offset);
+            moveOffset.set(0, 0, 0);
+          }
           
           viewer.requestRender();
           xrAfId = session.requestAnimationFrame(onXRFrame);
