@@ -19,6 +19,7 @@ import {
 import { Box3, Quaternion, Vector3, Euler } from 'three'; // Utilisé pour gérer des boîtes englobantes en 3D
 import { Pane } from 'tweakpane'; // Bibliothèque pour créer une interface utilisateur (boutons, menus, etc.)
 import * as THREE from 'three'; // on va créer un Group et l'utiliser
+import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory';
 
 
 
@@ -207,9 +208,59 @@ function createDebugPanel(): THREE.Mesh {
   return mesh;
 }
 
+// Système de logs persistants pour VR
+class VRDebugLogger {
+  private logs: Array<{ text: string; timestamp: number }> = [];
+  private maxLogs = 50; // Nombre max de lignes
+  private logLifetime = 10000; // 10 secondes de vie minimum
+
+  addLog(text: string) {
+    const now = Date.now();
+    this.logs.push({ text, timestamp: now });
+    
+    // Nettoyer les vieux logs (mais garder au moins les 20 derniers)
+    if (this.logs.length > this.maxLogs) {
+      const cutoff = now - this.logLifetime;
+      const oldLogs = this.logs.filter(log => log.timestamp < cutoff);
+      const recentLogs = this.logs.filter(log => log.timestamp >= cutoff);
+      
+      // Garder 20 logs récents + les logs importants
+      if (recentLogs.length > 20) {
+        this.logs = recentLogs;
+      } else {
+        this.logs = [...oldLogs.slice(-10), ...recentLogs];
+      }
+    }
+  }
+
+  addLogs(texts: string[]) {
+    texts.forEach(text => this.addLog(text));
+  }
+
+  getRecentLogs(): string[] {
+    return this.logs.map(log => {
+      const age = (Date.now() - log.timestamp) / 1000;
+      return `[${age.toFixed(1)}s] ${log.text}`;
+    });
+  }
+
+  addPersistentLog(text: string) {
+    // Log qui ne sera jamais supprimé automatiquement
+    this.logs.unshift({ text: `[PERSIST] ${text}`, timestamp: Date.now() + 999999999 });
+  }
+}
+
+// Instance globale
+const vrLogger = new VRDebugLogger();
+
 // Fonction améliorée pour mettre à jour le debug
-function updateDebugPanel(debugMesh: THREE.Mesh | null, lines: string[]) {
+function updateDebugPanel(debugMesh: THREE.Mesh | null, newLines?: string[]) {
   if (!debugMesh) return;
+  
+  // Ajouter les nouveaux logs
+  if (newLines) {
+    vrLogger.addLogs(newLines);
+  }
   
   const canvas = document.createElement('canvas');
   canvas.width = 800;
@@ -227,14 +278,24 @@ function updateDebugPanel(debugMesh: THREE.Mesh | null, lines: string[]) {
   
   // Titre
   ctx.fillStyle = '#00ff00';
-  ctx.font = 'bold 28px monospace';
-  ctx.fillText('DEBUG VR CONSOLE', 20, 35);
+  ctx.font = 'bold 24px monospace';
+  ctx.fillText(`DEBUG VR - Total logs: ${vrLogger.getRecentLogs().length}`, 20, 30);
   
-  // Lignes de debug
-  ctx.font = '20px monospace';
-  lines.forEach((line, i) => {
-    if (i < 25) { // Limiter le nombre de lignes
-      ctx.fillText(line.substring(0, 60), 20, 70 + (i * 22)); // Limiter la longueur
+  // Lignes de debug persistantes
+  ctx.font = '16px monospace';
+  const allLogs = vrLogger.getRecentLogs();
+  allLogs.forEach((line, i) => {
+    if (i < 30) { // Afficher max 30 lignes
+      // Couleur selon l'âge du log
+      if (line.includes('[PERSIST]')) {
+        ctx.fillStyle = '#ff0000'; // Rouge pour les logs persistants
+      } else if (line.includes('[0.') || line.includes('[1.')) {
+        ctx.fillStyle = '#00ff00'; // Vert pour les logs récents
+      } else {
+        ctx.fillStyle = '#888888'; // Gris pour les logs plus anciens
+      }
+      
+      ctx.fillText(line.substring(0, 80), 10, 55 + (i * 18));
     }
   });
   
@@ -295,63 +356,392 @@ async function main() {
   (cameraController as any).options = { 
   nearPlaneCalculation: NearPlaneCalculation.EMPIRIC, 
   };
+
+  // Structure pour gérer l'état des boutons du menu
+  interface VRMenuButton {
+    id: string;
+    originalLabel: string;
+    currentLabel: string;
+    clicked: boolean;
+    bounds: { x: number; y: number; width: number; height: number }; // en pixels canvas
+  }
+
+  // État du menu avec les boutons
+  class VRMenuState {
+    public buttons: VRMenuButton[] = [];
+    public hoveredButtonId: string | null = null;
+    
+    constructor() {
+      // Définir les boutons avec leurs positions sur le canvas
+      this.buttons = [
+        {
+          id: 'teleport',
+          originalLabel: 'Téléportation',
+          currentLabel: 'Téléportation',
+          clicked: false,
+          bounds: { x: 50, y: 160, width: 924, height: 100 }
+        },
+        {
+          id: 'settings',
+          originalLabel: 'Paramètres',
+          currentLabel: 'Paramètres',
+          clicked: false,
+          bounds: { x: 50, y: 300, width: 924, height: 100 }
+        },
+        {
+          id: 'desktop',
+          originalLabel: 'Retour Desktop',
+          currentLabel: 'Retour Desktop',
+          clicked: false,
+          bounds: { x: 50, y: 440, width: 924, height: 100 }
+        }
+      ];
+    }
+    
+    getButtonById(id: string): VRMenuButton | null {
+      return this.buttons.find(b => b.id === id) || null;
+    }
+    
+    clickButton(id: string) {
+      const button = this.getButtonById(id);
+      if (button) {
+        button.clicked = true;
+      }
+    }
+    
+    resetButton(id: string) {
+      const button = this.getButtonById(id);
+      if (button) {
+        button.clicked = false;
+      }
+    }
+    
+    setHovered(id: string | null) {
+      this.hoveredButtonId = id;
+    }
+  }
   
+  // Instance globale de l'état du menu
+  const menuState = new VRMenuState();
+
+  // --- Sous-menu Téléportation ---
+  type MenuMode = 'root' | 'tpList';
+  let menuMode: MenuMode = 'root';
+
+  // Un “point de téléportation”
+  interface TeleportPoint {
+    id: string;
+    label: string;
+    position: THREE.Vector3;
+  }
+
+  const teleportPoints: TeleportPoint[] = [];
+  let xrSpawn: THREE.Vector3 | null = null; // enregistré au 1er frame XR
+
+  function buildRootButtons(): VRMenuButton[] {
+    return [
+      { id: 'teleport', originalLabel: 'Téléportation', currentLabel: 'Téléportation', clicked: false, bounds: { x: 50, y: 160, width: 924, height: 100 } },
+      { id: 'settings', originalLabel: 'Paramètres', currentLabel: 'Paramètres', clicked: false, bounds: { x: 50, y: 300, width: 924, height: 100 } },
+      { id: 'desktop',  originalLabel: 'Retour Desktop', currentLabel: 'Retour Desktop', clicked: false, bounds: { x: 50, y: 440, width: 924, height: 100 } },
+    ];
+  }
+
+  function buildTeleportButtons(): VRMenuButton[] {
+    const buttons: VRMenuButton[] = [];
+    // On espace les items verticalement
+    let y = 160;
+    for (const tp of teleportPoints) {
+      buttons.push({
+        id: `tp_${tp.id}`,
+        originalLabel: tp.label,
+        currentLabel: tp.label,
+        clicked: false,
+        bounds: { x: 50, y, width: 924, height: 100 }
+      });
+      y += 140;
+    }
+    // Bouton retour
+    buttons.push({
+      id: 'back',
+      originalLabel: '← Retour',
+      currentLabel: '← Retour',
+      clicked: false,
+      bounds: { x: 50, y, width: 924, height: 100 }
+    });
+    return buttons;
+  }
+
+  function setMenuMode(mode: MenuMode, vrMenu: THREE.Mesh | null) {
+    menuMode = mode;
+    menuState.buttons = (mode === 'root') ? buildRootButtons() : buildTeleportButtons();
+    if (vrMenu) updateVrMenuPlane(vrMenu);
+  }
+
+  // Enregistre/rafraîchit le point “Spawn”
+  function upsertSpawnPoint() {
+    if (!xrSpawn) return;
+    const label = 'Spawn (point de départ)';
+    const idx = teleportPoints.findIndex(p => p.id === 'spawn');
+    if (idx === -1) teleportPoints.push({ id: 'spawn', label, position: xrSpawn.clone() });
+    else teleportPoints[idx].position.copy(xrSpawn);
+  }
+
+  // Ajoute / met à jour le point "Scène (objet 1229389)" si le TreeNode est trouvé
+  function upsertScenePoint(treeNodeMap: Map<string, any>, viewer: any) {
+    vrLogger.addPersistentLog('=== DEBUT UPSERT SCENE ===');
+    vrLogger.addPersistentLog(`TreeNodeMap size: ${treeNodeMap.size}`);
+    
+    const tn = treeNodeMap.get('1229389');
+    vrLogger.addPersistentLog(`TreeNode 1229389: ${tn ? 'TROUVÉ ✓' : 'NON TROUVÉ ✗'}`);
+    vrLogger.addPersistentLog(`Viewer: ${viewer ? 'TROUVÉ ✓' : 'NON TROUVÉ ✗'}`);
+    
+    if (!tn) {
+      vrLogger.addPersistentLog('ERREUR: TreeNode 1229389 introuvable');
+      return;
+    }
+
+    vrLogger.addPersistentLog(`TreeNode name: ${tn.model?.raw?.name || 'N/A'}`);
+
+    const center = getWorldCenterOfTreeNode(tn, viewer);
+    vrLogger.addPersistentLog(`Center: ${center ? `✓ (${center.x.toFixed(1)}, ${center.y.toFixed(1)}, ${center.z.toFixed(1)})` : '✗ NULL'}`);
+    
+    if (!center) {
+      vrLogger.addPersistentLog('ERREUR: Centre non calculable');
+      return;
+    }
+
+    const id = 'scene_1229389';
+    const label = 'Scène (objet 1229389)';
+    const idx = teleportPoints.findIndex(p => p.id === id);
+    
+    if (idx === -1) {
+      teleportPoints.push({ id, label, position: center.clone() });
+      vrLogger.addPersistentLog(`✓ Point TP ajouté: ${label}`);
+      vrLogger.addPersistentLog(`Total points TP: ${teleportPoints.length}`);
+    } else {
+      teleportPoints[idx].position.copy(center);
+      vrLogger.addPersistentLog(`✓ Point TP mis à jour: ${label}`);
+    }
+    
+    vrLogger.addPersistentLog('=== FIN UPSERT SCENE ===');
+  }
+
+  // TP en VR: déplace le referenceSpace pour amener la tête au point cible
+  function teleportToWorldPosition(target: THREE.Vector3, threeRenderer: any) {
+    const cam: THREE.Camera | any = threeRenderer.xr.getCamera?.();
+    if (!cam) return;
+    const current = new THREE.Vector3();
+    cam.getWorldPosition(current);
+
+    // On déplace le monde de (current - target) pour que la tête arrive sur target
+    const delta = current.sub(target);
+    const base = threeRenderer.xr.getReferenceSpace?.();
+    if (!base) return;
+
+    const offset = base.getOffsetReferenceSpace(new XRRigidTransform({
+      x: delta.x, y: delta.y, z: delta.z
+    }));
+    threeRenderer.xr.setReferenceSpace(offset);
+  }
+
+  // Retourne le centre monde d'un TreeNode (si possible)
+    function getWorldCenterOfTreeNode(tn: any, viewer: any): THREE.Vector3 | null {
+    try {
+      const elementId = tn?.model?.raw?.properties?.elementId;
+      const objectId  = tn?.model?.id;
+      const rawId     = tn?.model?.raw?.id;
+      const nodeId    = tn?.id;
+
+      vrLogger.addPersistentLog(`[TP] center(): elementId=${elementId ?? 'N/A'} | objectId=${objectId ?? 'N/A'} | rawId=${rawId ?? 'N/A'} | nodeId=${nodeId ?? 'N/A'}`);
+
+      // ---------- 1) API Speckle: getWorldBoundingBox ----------
+      try {
+        if (typeof viewer?.getWorldBoundingBox === 'function') {
+          const idCandidates: any[] = [
+            objectId,              // Speckle object id (souvent le bon)
+            nodeId,                // id de TreeNode
+            rawId,                 // parfois stocké dans raw.id
+          ].filter(Boolean);
+
+          for (const id of idCandidates) {
+            const arr = Array.isArray(id) ? id : [id];
+            const box = viewer.getWorldBoundingBox(arr);
+            if (box && box.isEmpty() === false) {
+              const c = new THREE.Vector3(); box.getCenter(c);
+              vrLogger.addPersistentLog(`[TP] centre via getWorldBoundingBox([${typeof id}:${String(id)}]) ✓`);
+              return c;
+            } else {
+              vrLogger.addPersistentLog(`[TP] getWorldBoundingBox vide pour id=${String(id)}`);
+            }
+          }
+
+          // Compat: certaines versions acceptent le node directement
+          const boxAlt = viewer.getWorldBoundingBox([tn]);
+          if (boxAlt && boxAlt.isEmpty() === false) {
+            const c = new THREE.Vector3(); boxAlt.getCenter(c);
+            vrLogger.addPersistentLog('[TP] centre via getWorldBoundingBox([tn]) ✓');
+            return c;
+          } else {
+            vrLogger.addPersistentLog('[TP] getWorldBoundingBox([tn]) vide');
+          }
+        } else {
+          vrLogger.addPersistentLog('[TP] getWorldBoundingBox indisponible');
+        }
+      } catch {
+        vrLogger.addPersistentLog('[TP] getWorldBoundingBox a levé une exception');
+      }
+
+      // ---------- 2) tn.worldBox / tn.bbox ----------
+      try {
+        const rawBox = (tn?.worldBox ?? tn?.bbox);
+        if (rawBox?.min && rawBox?.max) {
+          const box = new THREE.Box3(
+            new THREE.Vector3(rawBox.min.x, rawBox.min.y, rawBox.min.z),
+            new THREE.Vector3(rawBox.max.x, rawBox.max.y, rawBox.max.z)
+          );
+          if (!box.isEmpty()) {
+            const c = new THREE.Vector3(); box.getCenter(c);
+            vrLogger.addPersistentLog('[TP] centre via tn.worldBox/tn.bbox ✓');
+            return c;
+          } else {
+            vrLogger.addPersistentLog('[TP] tn.worldBox/tn.bbox présent mais vide');
+          }
+        } else {
+          vrLogger.addPersistentLog('[TP] tn.worldBox/tn.bbox indisponible');
+        }
+      } catch {
+        vrLogger.addPersistentLog('[TP] lecture tn.bbox a échoué');
+      }
+
+      // ---------- 3) Fallback Three.js : scan de la scène ----------
+      try {
+        const three = (viewer as any).getRenderer?.() ?? (viewer as any).renderer ?? undefined;
+        const scene: THREE.Scene | undefined =
+          (three?.scene as THREE.Scene | undefined) ??
+          (three?.renderer?.scene as THREE.Scene | undefined);
+
+        if (!scene) {
+          vrLogger.addPersistentLog('[TP] scène Three.js indisponible (fallback impossible)');
+        } else {
+          // on tente avec plusieurs clés connues
+          const wantedStrings = new Set(
+            [elementId, objectId, rawId, nodeId].filter(Boolean).map((x) => String(x))
+          );
+
+          let found: THREE.Object3D | undefined;
+          scene.traverse((o: THREE.Object3D) => {
+            if (found) return;
+            const ud: any = (o as any).userData || {};
+            const candidates: any[] = [
+              ud.elementId, ud.id, ud.speckle_id, ud.object_id, ud.__objectId, ud.__treeNodeId
+            ].filter(Boolean).map((x) => String(x));
+            for (const s of candidates) {
+              if (wantedStrings.has(s)) { found = o; break; }
+            }
+          });
+
+          if (!found) {
+            vrLogger.addPersistentLog('[TP] fallback Three.js: objet non trouvé (aucun userData id ne matche)');
+          } else {
+            (found as any).updateWorldMatrix?.(true, true);
+
+            const globalBox = new THREE.Box3();
+            const tmp = new THREE.Box3();
+
+            found!.traverse((child: THREE.Object3D) => {
+              const mesh = child as any;
+              const geom = mesh?.geometry as THREE.BufferGeometry | undefined;
+              if (!geom) return;
+              if (!geom.boundingBox && typeof geom.computeBoundingBox === 'function') {
+                geom.computeBoundingBox();
+              }
+              if (geom.boundingBox) {
+                tmp.copy(geom.boundingBox);
+                tmp.applyMatrix4((mesh as any).matrixWorld);
+                globalBox.union(tmp);
+              }
+            });
+
+            if (!globalBox.isEmpty()) {
+              const c = new THREE.Vector3(); globalBox.getCenter(c);
+              vrLogger.addPersistentLog('[TP] centre via fallback Three.js ✓');
+              return c;
+            } else {
+              vrLogger.addPersistentLog('[TP] fallback Three.js: bbox vide');
+            }
+          }
+        }
+      } catch {
+        vrLogger.addPersistentLog('[TP] fallback Three.js a levé une exception');
+      }
+
+      vrLogger.addPersistentLog('[TP] centre non calculable (tous essais KO)');
+      return null;
+    } catch {
+      vrLogger.addPersistentLog('[TP] centre: exception inattendue');
+      return null;
+    }
+  }
+
   // Crée un panneau 2D (plane) avec une texture canvas (titre + 3 items fictifs)
+  // Fonction améliorée pour créer le menu avec état dynamique
   function createVrMenuPlane(): THREE.Mesh {
-    const w = 2.0;   // Plus large pour être plus visible
-    const h = 1.2;   // Plus haut
+    const w = 2.0;
+    const h = 1.2;
 
     const canvas = document.createElement('canvas');
     canvas.width = 1024;
     canvas.height = 768;
     const ctx = canvas.getContext('2d')!;
 
-    // Fond avec couleur très contrastée
+    // Fond
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Bordure très visible
-    ctx.strokeStyle = '#ff6b00'; // Orange vif
+    // Bordure
+    ctx.strokeStyle = '#ff6b00';
     ctx.lineWidth = 12;
     ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
     
-    // Header très contrasté
+    // Header
     ctx.fillStyle = '#ff6b00';
     ctx.fillRect(20, 20, canvas.width - 40, 100);
     ctx.fillStyle = '#000';
     ctx.font = 'bold 52px Arial';
     ctx.textAlign = 'center';
     ctx.fillText('MENU VR ACTIF', canvas.width / 2, 85);
-
-    // Reset text align
     ctx.textAlign = 'left';
 
-    // Items avec couleurs très contrastées
-    const items = ['Téléportation', 'Paramètres', 'Retour Desktop'];
-    items.forEach((label, i) => {
-      const y = 160 + i * 140;
-      // Bouton avec gradient
-      const gradient = ctx.createLinearGradient(50, y, canvas.width - 50, y + 100);
-      gradient.addColorStop(0, '#0066cc');
-      gradient.addColorStop(1, '#004499');
+    // Dessiner les boutons selon l'état
+    menuState.buttons.forEach((button, i) => {
+      const bounds = button.bounds;
+      
+      // Couleur selon l'état
+      let buttonColor = '#0066cc';
+      let textColor = '#fff';
+      
+      // Gradient du bouton
+      const gradient = ctx.createLinearGradient(bounds.x, bounds.y, bounds.x + bounds.width, bounds.y + bounds.height);
+      gradient.addColorStop(0, buttonColor);
+      gradient.addColorStop(1, buttonColor + '88'); // Plus sombre
       ctx.fillStyle = gradient;
-      ctx.fillRect(50, y, canvas.width - 100, 100);
+      ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
       
       // Bordure du bouton
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = textColor;
       ctx.lineWidth = 6;
-      ctx.strokeRect(50, y, canvas.width - 100, 100);
+      ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
       
-      // Texte blanc
-      ctx.fillStyle = '#fff';
+      // Texte
+      ctx.fillStyle = textColor;
       ctx.font = 'bold 42px Arial';
-      ctx.fillText(label, 80, y + 65);
+      ctx.fillText(button.currentLabel, bounds.x + 30, bounds.y + 65);
     });
 
-    // Indicateur d'état en bas
+    // Instructions en bas
     ctx.fillStyle = '#00ff00';
     ctx.font = 'bold 32px Arial';
-    ctx.fillText('MENU VISIBLE - Appuyez A/B pour fermer', 50, canvas.height - 30);
+    ctx.fillText('Visez avec le contrôleur - Gâchette pour cliquer', 50, canvas.height - 30);
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.anisotropy = 16;
@@ -361,15 +751,120 @@ async function main() {
       map: tex, 
       transparent: true,
       side: THREE.DoubleSide,
-      depthTest: false,  // Toujours visible
+      depthTest: false,
       depthWrite: false
     });
     const geo = new THREE.PlaneGeometry(w, h);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = 'VR_MENU_PANEL';
-    mesh.renderOrder = 1000; // S'assurer qu'il se rend en dernier
+    mesh.renderOrder = 1000;
     
     return mesh;
+  }
+
+  // Fonction pour mettre à jour le menu (redessiner avec le nouvel état)
+  function updateVrMenuPlane(menuMesh: THREE.Mesh) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 768;
+    const ctx = canvas.getContext('2d')!;
+
+    // Fond
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Bordure
+    ctx.strokeStyle = '#ff6b00';
+    ctx.lineWidth = 12;
+    ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+    
+    // Header
+    ctx.fillStyle = '#ff6b00';
+    ctx.fillRect(20, 20, canvas.width - 40, 100);
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 52px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('MENU VR ACTIF', canvas.width / 2, 85);
+    ctx.textAlign = 'left';
+
+    // Dessiner les boutons selon l'état actuel
+    menuState.buttons.forEach((button) => {
+      const bounds = button.bounds;
+      
+      let buttonColor = '#0066cc';
+      let textColor = '#fff';      
+
+      if (menuState.hoveredButtonId === button.id) {
+        buttonColor = '#0088ff';
+      }
+      
+      const gradient = ctx.createLinearGradient(bounds.x, bounds.y, bounds.x + bounds.width, bounds.y + bounds.height);
+      gradient.addColorStop(0, buttonColor);
+      gradient.addColorStop(1, buttonColor + '88');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+      
+      ctx.strokeStyle = textColor;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+      
+      ctx.fillStyle = textColor;
+      ctx.font = 'bold 42px Arial';
+      ctx.fillText(button.currentLabel, bounds.x + 30, bounds.y + 65);
+    });
+
+    ctx.fillStyle = '#00ff00';
+    ctx.font = 'bold 28px Arial';
+    ctx.fillText(`Survolé: ${menuState.hoveredButtonId || 'aucun'}`, 50, canvas.height - 60);
+    ctx.fillText('Visez avec le contrôleur - Gâchette pour cliquer', 50, canvas.height - 30);
+
+    // Mettre à jour la texture
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.anisotropy = 16;
+    tex.needsUpdate = true;
+    (menuMesh.material as THREE.MeshBasicMaterial).map = tex;
+    (menuMesh.material as THREE.MeshBasicMaterial).needsUpdate = true;
+  }
+
+  // Système de raycasting pour detecter sur quel bouton on pointe
+  function checkMenuRaycast(controller: THREE.Object3D, menuMesh: THREE.Mesh): string | null {
+    if (!menuMesh || !menuMesh.visible) return null;
+    
+    const raycaster = new THREE.Raycaster();
+    
+    // Position et direction du contrôleur
+    const origin = new THREE.Vector3();
+    const direction = new THREE.Vector3(0, 0, -1);
+    
+    controller.getWorldPosition(origin);
+    direction.transformDirection(controller.matrixWorld);
+    
+    raycaster.set(origin, direction);
+    
+    // Test d'intersection avec le menu
+    const intersects = raycaster.intersectObject(menuMesh);
+    
+    if (intersects.length > 0) {
+      const intersection = intersects[0];
+      const uv = intersection.uv;
+      
+      if (uv) {
+        // Convertir les coordonnées UV en coordonnées pixel du canvas
+        const canvasX = uv.x * 1024;
+        const canvasY = (1 - uv.y) * 768; // Inverser Y car UV commence en bas
+        
+        // Vérifier quel bouton est touché
+        for (const button of menuState.buttons) {
+          const bounds = button.bounds;
+          if (canvasX >= bounds.x && canvasX <= bounds.x + bounds.width &&
+              canvasY >= bounds.y && canvasY <= bounds.y + bounds.height) {
+            return button.id;
+          }
+        }
+      }
+    }
+    
+    return null;
   }
 
   // Distance/offsets centralisés
@@ -510,7 +1005,7 @@ async function main() {
 
   // === VR (Quest) — même méthodo que le reste (addFolder/addBlade/addButton) ===
   const folderVR = (pane as any).addFolder({
-    title: 'VR (Quest) V2',
+    title: 'VR (Quest) [experimental]',
     expanded: true,
   });
 
@@ -861,6 +1356,40 @@ async function main() {
       // juste après setSession(...)
       setAllCamerasClipping(threeRenderer, 0.002, 500);
 
+      // === CRÉATION DES CONTRÔLEURS (CRUCIAL) ===
+      const controller0 = threeRenderer.xr.getController(0);
+      const controller1 = threeRenderer.xr.getController(1);
+      const controllerGrip0 = threeRenderer.xr.getControllerGrip(0);
+      const controllerGrip1 = threeRenderer.xr.getControllerGrip(1);
+
+      // Ajouter les contrôleurs à la scène
+      scene.add(controller0);
+      scene.add(controller1);
+      scene.add(controllerGrip0);
+      scene.add(controllerGrip1);
+
+      // Créer des géométries visuelles pour les contrôleurs (optionnel mais utile pour debug)
+      const controllerModelFactory = new XRControllerModelFactory();
+      const controllerGrip0Model = controllerModelFactory.createControllerModel(controllerGrip0);
+      const controllerGrip1Model = controllerModelFactory.createControllerModel(controllerGrip1);
+      controllerGrip0.add(controllerGrip0Model);
+      controllerGrip1.add(controllerGrip1Model);
+
+      // Créer des rayons visuels pour les contrôleurs
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, -1)
+      ]);
+      const line = new THREE.Line(geometry);
+      const line2 = line.clone();
+      
+      // Matériaux pour les rayons
+      line.material = new THREE.LineBasicMaterial({ color: 0xff0000 });
+      line2.material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+      
+      controller0.add(line.clone());
+      controller1.add(line2.clone());
+
 
         // Créer le panel de debug
         debugText = createDebugPanel();
@@ -881,6 +1410,49 @@ async function main() {
         // reset des états boutons à l’entrée de session
         prevRightA = prevRightB = false;
 
+        // === FONCTION DE RAYCASTING AMÉLIORÉE ===
+        function checkMenuRaycastImproved(controller: THREE.Object3D, menuMesh: THREE.Mesh): string | null {
+          if (!menuMesh || !menuMesh.visible) return null;
+          
+          const raycaster = new THREE.Raycaster();
+          
+          // Matrice du contrôleur
+          const tempMatrix = new THREE.Matrix4();
+          tempMatrix.identity().extractRotation(controller.matrixWorld);
+          
+          const raycasterOrigin = new THREE.Vector3();
+          const raycasterDirection = new THREE.Vector3(0, 0, -1);
+          
+          controller.getWorldPosition(raycasterOrigin);
+          raycasterDirection.applyMatrix4(tempMatrix);
+          
+          raycaster.set(raycasterOrigin, raycasterDirection);
+          
+          // Test d'intersection
+          const intersects = raycaster.intersectObject(menuMesh);
+          
+          if (intersects.length > 0) {
+            const intersection = intersects[0];
+            const uv = intersection.uv;
+            
+            if (uv) {
+              // Convertir UV en coordonnées canvas
+              const canvasX = uv.x * 1024;
+              const canvasY = (1 - uv.y) * 768;
+              
+              // Vérifier quel bouton est touché
+              for (const button of menuState.buttons) {
+                const bounds = button.bounds;
+                if (canvasX >= bounds.x && canvasX <= bounds.x + bounds.width &&
+                    canvasY >= bounds.y && canvasY <= bounds.y + bounds.height) {
+                  return button.id;
+                }
+              }
+            }
+          }
+          
+          return null;
+        }
 
         // --- RAF WebXR natif : manettes sans setAnimationLoop ---
         let xrAfId: number | null = null;
@@ -893,8 +1465,6 @@ async function main() {
         const VERT_SPEED = 2.0;     // m/s montée/descente drone
         const DZ         = 0.15;    // deadzone sticks
 
-        const AB_INDICES = [4, 5];
-
         function getAxes(src: XRInputSource): { x: number; y: number } {
           const gp = (src as any).gamepad as Gamepad | undefined;
           const ax0 = gp?.axes?.[0] ?? 0, ax1 = gp?.axes?.[1] ?? 0;
@@ -903,8 +1473,7 @@ async function main() {
           const x = Math.abs(ax2) + Math.abs(ax3) > Math.abs(ax0) + Math.abs(ax1) ? ax2 : ax0;
           const y = Math.abs(ax2) + Math.abs(ax3) > Math.abs(ax0) + Math.abs(ax1) ? ax3 : ax1;
           return { x, y };
-        }
-        
+        }        
 
         function onXRFrame(_time: DOMHighResTimeStamp, frame: XRFrame) {
           const session = frame.session;
@@ -915,21 +1484,58 @@ async function main() {
           debugLines.push(`InputSources: ${session.inputSources.length}`);
           
           let menuToggleRequested = false;
+          let triggerPressed = false;
+          let rightController: THREE.Object3D | null = null;
 
-          for (const [i, src] of session.inputSources.entries()) {
-            debugLines.push(`Source ${i}: ${src.handedness || 'none'}`);
+          // 1re pose XR disponible → on mémorise le spawn
+          if (!xrSpawn) {
+            const cam: THREE.Camera | any = threeRenderer.xr.getCamera?.();
+            if (cam) {
+              xrSpawn = new THREE.Vector3();
+              cam.getWorldPosition(xrSpawn);
+              upsertSpawnPoint();
+
+              // Debug persistant
+              vrLogger.addPersistentLog('🚀 XR SPAWN INITIALISE');
+              vrLogger.addLog(`TreeNodeMap size: ${treeNodeMap?.size || 0}`);
+              
+              // FORCER l'appel sans condition
+              upsertScenePoint(treeNodeMap, viewer);
+
+              if (vrMenu) setMenuMode('tpList' === menuMode ? 'tpList' : 'root', vrMenu);
+            }
+          }
+          // Analyser chaque contrôleur
+          for (const [index, inputSource] of session.inputSources.entries()) {
+            const hand = inputSource.handedness || 'unknown';
+            debugLines.push(`--- Contrôleur ${index} (${hand}) ---`);
             
-            if (!(src as any).gamepad) {
-              debugLines.push(`  No gamepad`);
-              continue;
+            const { pressed, justPressed } = controllerManager.getButtonStates(inputSource);
+            
+            debugLines.push(`Boutons pressés: [${pressed.join(', ')}]`);
+            debugLines.push(`Nouveaux appuis: [${justPressed.join(', ')}]`);
+            
+            // Toggle menu avec A/B (boutons 4,5)
+            if (hand === 'right') {
+              const AB_INDICES = [4, 5];
+              if (justPressed.some(i => AB_INDICES.includes(i))) {
+                menuToggleRequested = true;
+                debugLines.push(`>>> TOGGLE via A/B (indices ${justPressed.join(',')}) <<<`);
+              }
+              
+              // Détecter gâchette (bouton 0) pour le clic
+              if (justPressed.includes(0)) {
+                triggerPressed = true;
+                debugLines.push(`>>> GÂCHETTE PRESSÉE <<<`);
+              }
+
+              // IMPORTANT : Utiliser les vrais contrôleurs Three.js
+              rightController = index === 0 ? controller0 : controller1;
             }
             
-            const gp = (src as any).gamepad as Gamepad;
-            debugLines.push(`  Gamepad: ${gp.buttons?.length || 0} buttons`);
-            
-            // Déplacement (stick gauche)
-            if (src.handedness === 'left') {
-              const { x, y } = getAxes(src);
+            // Déplacement et montée/descente (votre code existant)
+            if (inputSource.handedness === 'left') {
+              const { x, y } = getAxes(inputSource);
               if (Math.hypot(x, y) > DZ) {
                 const cam = threeRenderer.xr.getCamera();
                 cam.getWorldDirection(tmpDir);
@@ -942,17 +1548,125 @@ async function main() {
               }
             }
             
-            // Montée/descente (stick droit)
-            if (src.handedness === 'right') {
-              const { x, y } = getAxes(src);
+            if (inputSource.handedness === 'right') {
+              const { x, y } = getAxes(inputSource);
               if (Math.abs(y) > DZ) {
                 const dt = 1 / 60;
                 moveOffset.y += (-y) * VERT_SPEED * dt;
               }
             }
           }
+          
+          // Gestion du toggle menu
+          if (menuToggleRequested) {
+            vrMenuVisible = !vrMenuVisible;
+            debugLines.push(`MENU ${vrMenuVisible ? 'ACTIVÉ' : 'DÉSACTIVÉ'}`);
+            
+            if (!vrMenu) {
+              vrMenu = createVrMenuPlane();
+              scene.add(vrMenu);
+              debugLines.push('Menu créé et ajouté à la scène');
+            }
+            
+            if (vrMenu) {
+              vrMenu.visible = vrMenuVisible;
+              debugLines.push(`Menu.visible = ${vrMenu.visible}`);
+            }
+          }
+          if (vrMenu && rightController) {
+            checkMenuRaycast(rightController, vrMenu);
+          }
+          
+          // === RAYCASTING ET INTERACTION AMÉLIORÉS ===
+          let hoveredButtonId: string | null = null;
+          if (vrMenu && vrMenuVisible && rightController) {
+            // Utiliser la fonction de raycasting améliorée
+            hoveredButtonId = checkMenuRaycastImproved(rightController, vrMenu);
+            
+            debugLines.push(`Raycasting avec contrôleur: ${rightController.name || 'unnamed'}`);
+            debugLines.push(`Position contrôleur: ${rightController.position.x.toFixed(2)}, ${rightController.position.y.toFixed(2)}, ${rightController.position.z.toFixed(2)}`);
+            
+            if (hoveredButtonId !== menuState.hoveredButtonId) {
+              menuState.setHovered(hoveredButtonId);
+              updateVrMenuPlane(vrMenu);
+              debugLines.push(`Survol changé: ${hoveredButtonId || 'aucun'}`);
+            }
+            
+            // Clic sur bouton
+            if (triggerPressed && hoveredButtonId) {
+              menuState.clickButton(hoveredButtonId);
+              updateVrMenuPlane(vrMenu);
+              debugLines.push(`BOUTON CLIQUÉ: ${hoveredButtonId}`);
+              
+              // Actions spécifiques selon le bouton
+              switch (hoveredButtonId) {
+                case 'teleport':
+                  debugLines.push('Action: Ouvrir sous-menu TP');
+                  setMenuMode('tpList', vrMenu);
+                  break;
+                case 'settings':
+                  debugLines.push('Action: Ouvrir paramètres');
+                  break;
+                case 'desktop':
+                  debugLines.push('Action: Retour desktop');
+                  break;
 
-          // Déplacement
+                case 'back':
+                debugLines.push('Action: Retour au menu principal');
+                setMenuMode('root', vrMenu);
+                break;
+
+              default:
+                // Items dynamiques de TP : ids "tp_<id>"
+                if (hoveredButtonId.startsWith('tp_')) {
+                  const tpId = hoveredButtonId.substring(3);
+                  const tp = teleportPoints.find(p => p.id === tpId);
+                  if (tp) {
+                    debugLines.push(`Action: TP vers ${tp.label}`);
+                    teleportToWorldPosition(tp.position, threeRenderer);
+                    menuToggleRequested = true;
+                  }
+                }
+                break;
+              }
+              
+              // Reset du bouton après 2 secondes
+              setTimeout(() => {
+                if (vrMenu && vrMenuVisible) {
+                  menuState.resetButton(hoveredButtonId!);
+                  updateVrMenuPlane(vrMenu);
+                }
+              }, 2000);
+            }
+          }
+          
+          debugLines.push(`--- Interaction Menu ---`);
+          debugLines.push(`Contrôleur droit trouvé: ${rightController ? 'OUI' : 'NON'}`);
+          debugLines.push(`Bouton survolé: ${hoveredButtonId || 'aucun'}`);
+          debugLines.push(`Gâchette pressée: ${triggerPressed ? 'OUI' : 'NON'}`);
+          
+          // Positionner le menu
+          if (vrMenu && vrMenuVisible) {
+            const positioned = positionMenuInFrontOfUser(vrMenu, threeRenderer);
+            debugLines.push(`Menu positionné: ${positioned ? 'OUI' : 'NON'}`);
+          }
+          
+          // Positionner le debug panel (votre code existant)
+          if (debugText) {
+            const cam = threeRenderer.xr.getCamera();
+            if (cam) {
+              const camPos = new THREE.Vector3(); cam.getWorldPosition(camPos);
+              const fwd   = new THREE.Vector3();  cam.getWorldDirection(fwd);
+              
+              const p = camPos.clone().addScaledVector(fwd, MENU_DISTANCE);
+              p.y += MENU_Y_OFFSET-1;
+              
+              debugText.position.copy(p);
+              debugText.lookAt(camPos);
+            }
+          }
+          
+          // Déplacement (votre code existant)
           if (moveOffset.lengthSq() > 0) {
             const base = threeRenderer.xr.getReferenceSpace();
             const xform = new XRRigidTransform({
@@ -965,85 +1679,7 @@ async function main() {
             moveOffset.set(0, 0, 0);
           }
           
-          // Analyser chaque contrôleur
-          for (const [index, inputSource] of session.inputSources.entries()) {
-            const hand = inputSource.handedness || 'unknown';
-            debugLines.push(`--- Contrôleur ${index} (${hand}) ---`);
-            
-            const { pressed, justPressed } = controllerManager.getButtonStates(inputSource);
-            
-            debugLines.push(`Boutons pressés: [${pressed.join(', ')}]`);
-            debugLines.push(`Nouveaux appuis: [${justPressed.join(', ')}]`);
-            
-            // Si n'importe quel bouton est pressé pour la première fois, toggle le menu
-            if (hand === 'right') {
-              if (justPressed.some(i => AB_INDICES.includes(i))) {
-                menuToggleRequested = true;
-                debugLines.push(`>>> TOGGLE via A/B (indices ${justPressed.join(',')}) <<<`);
-              }
-            }
-            
-            // Info sur le gamepad
-            const gamepad = (inputSource as any).gamepad as Gamepad | undefined;
-            if (gamepad) {
-              debugLines.push(`Gamepad: ${gamepad.buttons?.length || 0} boutons`);
-              if (gamepad.axes) {
-                const axes = Array.from(gamepad.axes).map(a => a.toFixed(2));
-                debugLines.push(`Axes: [${axes.join(', ')}]`);
-              }
-            } else {
-              debugLines.push(`Aucun gamepad détecté`);
-            }
-          }
-          
-          // Gestion du menu
-          if (menuToggleRequested) {
-            vrMenuVisible = !vrMenuVisible;
-            debugLines.push(`MENU ${vrMenuVisible ? 'ACTIVÉ' : 'DÉSACTIVÉ'}`);
-            
-            // Créer le menu s'il n'existe pas
-            if (!vrMenu) {
-              vrMenu = createVrMenuPlane();
-              scene.add(vrMenu);
-              debugLines.push('Menu créé et ajouté à la scène');
-            }
-            
-            if (vrMenu) {
-              vrMenu.visible = vrMenuVisible;
-              debugLines.push(`Menu.visible = ${vrMenu.visible}`);
-            }
-          }
-          
-          debugLines.push(`--- État Menu ---`);
-          debugLines.push(`Menu existe: ${vrMenu ? 'OUI' : 'NON'}`);
-          debugLines.push(`Menu visible: ${vrMenuVisible}`);
-          debugLines.push(`Menu dans scène: ${vrMenu && scene.children.includes(vrMenu) ? 'OUI' : 'NON'}`);
-          
-          // Positionner le menu
-          if (vrMenu && vrMenuVisible) {
-            const positioned = positionMenuInFrontOfUser(vrMenu, threeRenderer);
-            debugLines.push(`Menu positionné: ${positioned ? 'OUI' : 'NON'}`);
-          }
-          
-          // Positionner le debug panel
-          if (debugText) {
-            const cam = threeRenderer.xr.getCamera();
-            if (cam) {
-              const camPos = new THREE.Vector3(); cam.getWorldPosition(camPos);
-              const fwd   = new THREE.Vector3();  cam.getWorldDirection(fwd);
-              // const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0,1,0)).normalize();
-
-              const p = camPos.clone().addScaledVector(fwd, MENU_DISTANCE);
-              p.y += MENU_Y_OFFSET;
-
-              debugText.position.copy(p);
-              debugText.lookAt(camPos);
-            }
-          }
-          
-          // Mettre à jour l'affichage debug
           updateDebugPanel(debugText, debugLines);
-          
           viewer.requestRender();
           xrAfId = session.requestAnimationFrame(onXRFrame);
         }
@@ -1052,7 +1688,7 @@ async function main() {
         xrAfId = session.requestAnimationFrame(onXRFrame);
 
 
-        // N'oubliez pas de nettoyer les états quand la session se ferme
+        // Nettoyage à la fermeture de session
         session.addEventListener('end', () => {
           controllerManager.cleanup();
           if (xrAfId !== null) {
@@ -1069,6 +1705,12 @@ async function main() {
             scene.remove(debugText);
             debugText = null;
           }
+          
+          // Retirer les contrôleurs
+          scene.remove(controller0);
+          scene.remove(controller1);
+          scene.remove(controllerGrip0);
+          scene.remove(controllerGrip1);
           
           viewer.requestRender();
         });
