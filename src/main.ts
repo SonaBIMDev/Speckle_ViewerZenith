@@ -176,8 +176,8 @@ function specklePointToThreeMeters(viewer: Viewer, locCm: {x:number;y:number;z:n
 // Fonction pour créer un panneau de debug visible en VR
 function createDebugPanel(): THREE.Mesh {
   const canvas = document.createElement('canvas');
-  canvas.width = 800;
-  canvas.height = 600;
+  canvas.width = 5800;
+  canvas.height = 1000;
   const ctx = canvas.getContext('2d')!;
   
   // Fond semi-transparent plus visible
@@ -203,7 +203,7 @@ function createDebugPanel(): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(1.6, 1.2);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'DEBUG_PANEL';
-  mesh.renderOrder = 999;
+  mesh.renderOrder = 500;
   
   return mesh;
 }
@@ -317,11 +317,14 @@ async function main() {
   let prevRightB = false;
   let debugText: THREE.Mesh | null = null; // Pour afficher du texte de debug en VR
 
-   // Afficher le spinner au chargement initial
-   const spinnerContainer = document.getElementById("spinner-container");
+  let laserLine0: THREE.Line | null = null;
+  let laserLine1: THREE.Line | null = null;
+
+  // Afficher le spinner au chargement initial
+  const spinnerContainer = document.getElementById("spinner-container");
    if (spinnerContainer) {
      spinnerContainer.style.display = "block";
-   }
+  }
 
   /** Get the HTML container */
   const container = document.getElementById('renderer') as HTMLElement;
@@ -425,7 +428,7 @@ async function main() {
   const menuState = new VRMenuState();
 
   // --- Sous-menu Téléportation ---
-  type MenuMode = 'root' | 'tpList';
+  type MenuMode = 'root' | 'tpList' | 'image360List';
   let menuMode: MenuMode = 'root';
 
   // Un “point de téléportation”
@@ -441,39 +444,136 @@ async function main() {
   function buildRootButtons(): VRMenuButton[] {
     return [
       { id: 'teleport', originalLabel: 'Téléportation', currentLabel: 'Téléportation', clicked: false, bounds: { x: 50, y: 160, width: 924, height: 100 } },
-      { id: 'settings', originalLabel: 'Paramètres', currentLabel: 'Paramètres', clicked: false, bounds: { x: 50, y: 300, width: 924, height: 100 } },
+      { id: 'image360', originalLabel: 'Images 360', currentLabel: 'Images 360', clicked: false, bounds: { x: 50, y: 300, width: 924, height: 100 } },
       { id: 'desktop',  originalLabel: 'Retour Desktop', currentLabel: 'Retour Desktop', clicked: false, bounds: { x: 50, y: 440, width: 924, height: 100 } },
     ];
   }
 
+  // Version modifiée de buildTeleportButtons avec support du scroll
   function buildTeleportButtons(): VRMenuButton[] {
     const buttons: VRMenuButton[] = [];
-    // On espace les items verticalement
-    let y = 160;
-    for (const tp of teleportPoints) {
-      buttons.push({
-        id: `tp_${tp.id}`,
-        originalLabel: tp.label,
-        currentLabel: tp.label,
-        clicked: false,
-        bounds: { x: 50, y, width: 924, height: 100 }
-      });
-      y += 140;
+    const buttonHeight = 80; // Réduit pour avoir plus de place
+    const buttonSpacing = 90;
+    const startY = 160;
+    const endY = 580; // Zone visible jusqu'à 580px pour laisser de l'espace
+    const maxVisibleButtons = Math.floor((endY - startY) / buttonSpacing); // Calcul dynamique
+    
+    // Calculer le scroll maximum
+    const totalButtons = teleportPoints.length + 1; // +1 pour le bouton retour
+    maxScrollOffset = Math.max(0, (totalButtons - maxVisibleButtons) * buttonSpacing + buttonSpacing); // +buttonSpacing pour l'espace en bas
+    
+    // Limiter le scroll dans les bornes
+    menuScrollOffset = Math.max(0, Math.min(menuScrollOffset, maxScrollOffset));
+    
+    // Créer les boutons pour les points TP visibles
+    let visibleIndex = 0;
+    for (let i = 0; i < teleportPoints.length; i++) {
+      const tp = teleportPoints[i];
+      const buttonY = startY + (visibleIndex * buttonSpacing) - menuScrollOffset;
+      
+      // Ne créer le bouton que s'il est potentiellement visible (avec plus d'espace)
+      if (buttonY > -buttonHeight && buttonY < endY + buttonHeight) {
+        buttons.push({
+          id: tp.id, // Utiliser l'ID direct du teleportPoint
+          originalLabel: tp.label,
+          currentLabel: tp.label,
+          clicked: false,
+          bounds: { x: 50, y: buttonY, width: 924, height: buttonHeight }
+        });
+      }
+      visibleIndex++;
     }
+    
     // Bouton retour
-    buttons.push({
-      id: 'back',
-      originalLabel: '← Retour',
-      currentLabel: '← Retour',
-      clicked: false,
-      bounds: { x: 50, y, width: 924, height: 100 }
-    });
+    const backButtonY = startY + (visibleIndex * buttonSpacing) - menuScrollOffset;
+    if (backButtonY > -buttonHeight && backButtonY < endY + buttonHeight) {
+      buttons.push({
+        id: 'back',
+        originalLabel: '← Retour',
+        currentLabel: '← Retour',
+        clicked: false,
+        bounds: { x: 50, y: backButtonY, width: 924, height: buttonHeight }
+      });
+    }
+    
     return buttons;
   }
 
+  // Ajouter après buildTeleportButtons() :
+  function buildImage360Buttons(): VRMenuButton[] {
+    const buttons: VRMenuButton[] = [];
+    const buttonHeight = 80;
+    const buttonSpacing = 90;
+    const startY = 160;
+    const endY = 580;
+    const maxVisibleButtons = Math.floor((endY - startY) / buttonSpacing);
+    
+    // Filtrer seulement les points qui ont des URLs d'images 360
+    const pointsWithImages = teleportPoints.filter(tp => {
+      // Récupérer l'ID original depuis l'ID du teleportPoint
+      const originalId = tp.id.replace('tp_', '');
+      const tn = treeNodeMap.get(originalId);
+      if (!tn) return false;
+      
+      // Vérifier si ce point a une URL_PANO
+      const props = tn?.model?.raw?.properties;
+      const parameterUrl = findParameterByName(props, 'URL_PANO');
+      return parameterUrl && parameterUrl.value && parameterUrl.value.trim() !== '';
+    });
+    
+    // Calculer le scroll maximum
+    const totalButtons = pointsWithImages.length + 1; // +1 pour le bouton retour
+    maxScrollOffset = Math.max(0, (totalButtons - maxVisibleButtons) * buttonSpacing + buttonSpacing);
+    
+    // Limiter le scroll dans les bornes
+    menuScrollOffset = Math.max(0, Math.min(menuScrollOffset, maxScrollOffset));
+    
+    // Créer les boutons pour les points avec images visibles
+    let visibleIndex = 0;
+    for (let i = 0; i < pointsWithImages.length; i++) {
+      const tp = pointsWithImages[i];
+      const buttonY = startY + (visibleIndex * buttonSpacing) - menuScrollOffset;
+      
+      if (buttonY > -buttonHeight && buttonY < endY + buttonHeight) {
+        buttons.push({
+          id: tp.id, // Garder l'ID du teleportPoint pour la cohérence
+          originalLabel: `📷 ${tp.label}`, // Ajouter une icône pour différencier
+          currentLabel: `📷 ${tp.label}`,
+          clicked: false,
+          bounds: { x: 50, y: buttonY, width: 924, height: buttonHeight }
+        });
+      }
+      visibleIndex++;
+    }
+    
+    // Bouton retour
+    const backButtonY = startY + (visibleIndex * buttonSpacing) - menuScrollOffset;
+    if (backButtonY > -buttonHeight && backButtonY < endY + buttonHeight) {
+      buttons.push({
+        id: 'back',
+        originalLabel: '← Retour',
+        currentLabel: '← Retour',
+        clicked: false,
+        bounds: { x: 50, y: backButtonY, width: 924, height: buttonHeight }
+      });
+    }
+    
+    return buttons;
+  }
+
+  // Remplacer la version existante de setMenuMode
   function setMenuMode(mode: MenuMode, vrMenu: THREE.Mesh | null) {
     menuMode = mode;
-    menuState.buttons = (mode === 'root') ? buildRootButtons() : buildTeleportButtons();
+    menuScrollOffset = 0; // Reset scroll à chaque changement de mode
+    
+    if (mode === 'root') {
+      menuState.buttons = buildRootButtons();
+    } else if (mode === 'tpList') {
+      menuState.buttons = buildTeleportButtons();
+    } else if (mode === 'image360List') {
+      menuState.buttons = buildImage360Buttons();
+    }
+    
     if (vrMenu) updateVrMenuPlane(vrMenu);
   }
 
@@ -486,44 +586,73 @@ async function main() {
     else teleportPoints[idx].position.copy(xrSpawn);
   }
 
-  // Ajoute / met à jour le point "Scène (objet 1229389)" si le TreeNode est trouvé
-  function upsertScenePoint(treeNodeMap: Map<string, any>, viewer: any) {
-    vrLogger.addPersistentLog('=== DEBUT UPSERT SCENE ===');
-    vrLogger.addPersistentLog(`TreeNodeMap size: ${treeNodeMap.size}`);
-    
-    const tn = treeNodeMap.get('1229389');
-    vrLogger.addPersistentLog(`TreeNode 1229389: ${tn ? 'TROUVÉ ✓' : 'NON TROUVÉ ✗'}`);
-    vrLogger.addPersistentLog(`Viewer: ${viewer ? 'TROUVÉ ✓' : 'NON TROUVÉ ✗'}`);
-    
-    if (!tn) {
-      vrLogger.addPersistentLog('ERREUR: TreeNode 1229389 introuvable');
-      return;
-    }
+  const TELEPORT_LOCATIONS = [
+    { id: '1229389', label: 'Scène' },
+    { id: '1228695', label: 'Régie' },
+    { id: '1226120', label: 'Bar craft' },
+    { id: '1226484', label: 'Bar étage' },
+    { id: '1226626', label: 'Hall milieu' },
+    { id: '1228946', label: 'Salle jardin' },
+    { id: '1225014', label: 'Gradins cour' },
+    { id: '1225435', label: 'Gradins salle' },
+    { id: '1225954', label: 'Gradins jardin' },
+    { id: '1227119', label: 'Passerelle' },
+    { id: '1227371', label: 'Passerelle salle' }
+  ];
 
-    vrLogger.addPersistentLog(`TreeNode name: ${tn.model?.raw?.name || 'N/A'}`);
+  // Variables pour le système de scroll
+  let menuScrollOffset = 0;
+  let maxScrollOffset = 0;
+  let menuScrollDisabled = false;
 
-    const center = getWorldCenterOfTreeNode(tn, viewer);
-    vrLogger.addPersistentLog(`Center: ${center ? `✓ (${center.x.toFixed(1)}, ${center.y.toFixed(1)}, ${center.z.toFixed(1)})` : '✗ NULL'}`);
+  // Fonction pour upsert tous les points de téléportation
+  function upsertAllTeleportPoints(treeNodeMap: Map<string, any>, viewer: any) {
+    vrLogger.addPersistentLog('=== DEBUT UPSERT ALL TELEPORT POINTS ===');
     
-    if (!center) {
-      vrLogger.addPersistentLog('ERREUR: Centre non calculable');
-      return;
-    }
+    let successCount = 0;
+    let failCount = 0;
+    
+    // Toujours ajouter/mettre à jour le spawn en premier
+    upsertSpawnPoint();
+    
+    // Ajouter tous les points de la liste
+    for (const location of TELEPORT_LOCATIONS) {
+      try {
+        const tn = treeNodeMap.get(location.id);
+        if (!tn) {
+          vrLogger.addPersistentLog(`❌ TreeNode ${location.id} (${location.label}) non trouvé`);
+          failCount++;
+          continue;
+        }
 
-    const id = 'scene_1229389';
-    const label = 'Scène (objet 1229389)';
-    const idx = teleportPoints.findIndex(p => p.id === id);
-    
-    if (idx === -1) {
-      teleportPoints.push({ id, label, position: center.clone() });
-      vrLogger.addPersistentLog(`✓ Point TP ajouté: ${label}`);
-      vrLogger.addPersistentLog(`Total points TP: ${teleportPoints.length}`);
-    } else {
-      teleportPoints[idx].position.copy(center);
-      vrLogger.addPersistentLog(`✓ Point TP mis à jour: ${label}`);
+        const center = getWorldCenterOfTreeNode(tn, viewer);
+        if (!center) {
+          vrLogger.addPersistentLog(`❌ Centre non calculable pour ${location.label}`);
+          failCount++;
+          continue;
+        }
+
+        const tpId = `tp_${location.id}`;
+        const idx = teleportPoints.findIndex(p => p.id === tpId);
+        
+        if (idx === -1) {
+          teleportPoints.push({ id: tpId, label: location.label, position: center.clone() });
+          vrLogger.addPersistentLog(`✅ Point TP ajouté: ${location.label}`);
+        } else {
+          teleportPoints[idx].position.copy(center);
+          vrLogger.addPersistentLog(`✅ Point TP mis à jour: ${location.label}`);
+        }
+        
+        successCount++;
+        
+      } catch (error) {
+        vrLogger.addPersistentLog(`❌ Erreur pour ${location.label}: ${(error as Error).message}`);
+        failCount++;
+      }
     }
     
-    vrLogger.addPersistentLog('=== FIN UPSERT SCENE ===');
+    vrLogger.addPersistentLog(`=== FIN UPSERT: ${successCount} succès, ${failCount} échecs ===`);
+    vrLogger.addPersistentLog(`Total points TP: ${teleportPoints.length}`);
   }
 
   // TP en VR: déplace le referenceSpace pour amener la tête au point cible
@@ -544,143 +673,208 @@ async function main() {
     threeRenderer.xr.setReferenceSpace(offset);
   }
 
-  // Retourne le centre monde d'un TreeNode (si possible)
-    function getWorldCenterOfTreeNode(tn: any, viewer: any): THREE.Vector3 | null {
+  // Calculer la transformation exacte basée sur vos données
+  function calculateSpeckleToViewerTransform() {
+    // Coordonnées du spawn dans les paramètres Speckle originaux
+    const speckleOriginal = {
+      x: 7310.294959203261,
+      y: 5726.696462183248, 
+      z: 1099.9999999999998
+    };
+    
+    // Coordonnées utilisées pour le spawn dans le viewer (après transformation manuelle)
+    const viewerTransformed = {
+      x: 7310.294959203261,
+      y: -1563.358968165413,
+      z: 4290.0
+    };
+    
+    // Calculer les offsets de transformation
+    const transform = {
+      x: viewerTransformed.x - speckleOriginal.x, // = 0
+      y: (viewerTransformed.y - speckleOriginal.y), 
+      z: (viewerTransformed.z - speckleOriginal.z)+ 250  
+    };
+    
+    return transform;
+  }
+
+  // Fonction pour appliquer la transformation Speckle -> Viewer
+  function applySpeckleTransform(originalCoords: {x: number, y: number, z: number}) {
+    const transform = calculateSpeckleToViewerTransform();
+    
+    return {
+      x: originalCoords.x + transform.x,
+      y: originalCoords.y + transform.y,
+      z: originalCoords.z + transform.z
+    };
+  }
+
+  // Version simplifiée de getWorldCenterOfTreeNode
+  function getWorldCenterOfTreeNode(tn: any, viewer: any): THREE.Vector3 | null {
     try {
-      const elementId = tn?.model?.raw?.properties?.elementId;
-      const objectId  = tn?.model?.id;
-      const rawId     = tn?.model?.raw?.id;
-      const nodeId    = tn?.id;
-
-      vrLogger.addPersistentLog(`[TP] center(): elementId=${elementId ?? 'N/A'} | objectId=${objectId ?? 'N/A'} | rawId=${rawId ?? 'N/A'} | nodeId=${nodeId ?? 'N/A'}`);
-
-      // ---------- 1) API Speckle: getWorldBoundingBox ----------
-      try {
-        if (typeof viewer?.getWorldBoundingBox === 'function') {
-          const idCandidates: any[] = [
-            objectId,              // Speckle object id (souvent le bon)
-            nodeId,                // id de TreeNode
-            rawId,                 // parfois stocké dans raw.id
-          ].filter(Boolean);
-
-          for (const id of idCandidates) {
-            const arr = Array.isArray(id) ? id : [id];
-            const box = viewer.getWorldBoundingBox(arr);
-            if (box && box.isEmpty() === false) {
-              const c = new THREE.Vector3(); box.getCenter(c);
-              vrLogger.addPersistentLog(`[TP] centre via getWorldBoundingBox([${typeof id}:${String(id)}]) ✓`);
-              return c;
-            } else {
-              vrLogger.addPersistentLog(`[TP] getWorldBoundingBox vide pour id=${String(id)}`);
-            }
-          }
-
-          // Compat: certaines versions acceptent le node directement
-          const boxAlt = viewer.getWorldBoundingBox([tn]);
-          if (boxAlt && boxAlt.isEmpty() === false) {
-            const c = new THREE.Vector3(); boxAlt.getCenter(c);
-            vrLogger.addPersistentLog('[TP] centre via getWorldBoundingBox([tn]) ✓');
-            return c;
-          } else {
-            vrLogger.addPersistentLog('[TP] getWorldBoundingBox([tn]) vide');
-          }
-        } else {
-          vrLogger.addPersistentLog('[TP] getWorldBoundingBox indisponible');
-        }
-      } catch {
-        vrLogger.addPersistentLog('[TP] getWorldBoundingBox a levé une exception');
+      vrLogger.addPersistentLog('[TP] === RECHERCHE POSITION DANS PARAMETRES SPECKLE ===');
+      
+      if (!tn?.model?.raw) {
+        vrLogger.addPersistentLog('[TP] ERREUR: TreeNode.model.raw manquant');
+        return null;
       }
 
-      // ---------- 2) tn.worldBox / tn.bbox ----------
-      try {
-        const rawBox = (tn?.worldBox ?? tn?.bbox);
-        if (rawBox?.min && rawBox?.max) {
-          const box = new THREE.Box3(
-            new THREE.Vector3(rawBox.min.x, rawBox.min.y, rawBox.min.z),
-            new THREE.Vector3(rawBox.max.x, rawBox.max.y, rawBox.max.z)
-          );
-          if (!box.isEmpty()) {
-            const c = new THREE.Vector3(); box.getCenter(c);
-            vrLogger.addPersistentLog('[TP] centre via tn.worldBox/tn.bbox ✓');
-            return c;
-          } else {
-            vrLogger.addPersistentLog('[TP] tn.worldBox/tn.bbox présent mais vide');
+      const rawData = tn.model.raw;
+      const properties = rawData.properties || {};
+      
+      vrLogger.addPersistentLog(`[TP] Clés rawData: [${Object.keys(rawData).slice(0, 15).join(', ')}]`);
+      vrLogger.addPersistentLog(`[TP] Clés properties: [${Object.keys(properties).slice(0, 15).join(', ')}]`);
+
+      // 1. Chercher d'abord dans les paramètres (comme pour le spawn)
+      const parameterKeys = [
+        'location', 'position', 'origin', 'basePoint', 'insertionPoint',
+        'transform', 'placement', 'coordinate', 'point'
+      ];
+
+      // Chercher dans les propriétés directes
+      for (const key of parameterKeys) {
+        const posData = rawData[key] || properties[key];
+        if (posData && typeof posData === 'object') {
+          const coords = extractCoordinates(posData, key);
+          if (coords) {
+            vrLogger.addPersistentLog(`[TP] Position trouvée via ${key}: x=${coords.x}, y=${coords.y}, z=${coords.z}`);
+            
+            // Appliquer la transformation Speckle -> Viewer
+            const transformed = applySpeckleTransform(coords);
+            vrLogger.addPersistentLog(`[TP] Après transformation: x=${transformed.x}, y=${transformed.y}, z=${transformed.z}`);
+            
+            // Convertir en coordonnées Three.js
+            const finalPos = specklePointToThreeMeters(viewer, transformed);
+            vrLogger.addPersistentLog(`[TP] ✅ Position finale: (${finalPos.x.toFixed(2)}, ${finalPos.y.toFixed(2)}, ${finalPos.z.toFixed(2)})`);
+            
+            return finalPos;
           }
-        } else {
-          vrLogger.addPersistentLog('[TP] tn.worldBox/tn.bbox indisponible');
         }
-      } catch {
-        vrLogger.addPersistentLog('[TP] lecture tn.bbox a échoué');
       }
 
-      // ---------- 3) Fallback Three.js : scan de la scène ----------
-      try {
-        const three = (viewer as any).getRenderer?.() ?? (viewer as any).renderer ?? undefined;
-        const scene: THREE.Scene | undefined =
-          (three?.scene as THREE.Scene | undefined) ??
-          (three?.renderer?.scene as THREE.Scene | undefined);
+      // 2. Chercher dans les paramètres Speckle (Instance/Type Parameters)
+      const paramSources = [
+        properties?.Parameters?.['Instance Parameters'],
+        properties?.Parameters?.['Type Parameters'],
+        rawData['Instance Parameters'],
+        rawData['Type Parameters']
+      ];
 
-        if (!scene) {
-          vrLogger.addPersistentLog('[TP] scène Three.js indisponible (fallback impossible)');
-        } else {
-          // on tente avec plusieurs clés connues
-          const wantedStrings = new Set(
-            [elementId, objectId, rawId, nodeId].filter(Boolean).map((x) => String(x))
-          );
-
-          let found: THREE.Object3D | undefined;
-          scene.traverse((o: THREE.Object3D) => {
-            if (found) return;
-            const ud: any = (o as any).userData || {};
-            const candidates: any[] = [
-              ud.elementId, ud.id, ud.speckle_id, ud.object_id, ud.__objectId, ud.__treeNodeId
-            ].filter(Boolean).map((x) => String(x));
-            for (const s of candidates) {
-              if (wantedStrings.has(s)) { found = o; break; }
-            }
-          });
-
-          if (!found) {
-            vrLogger.addPersistentLog('[TP] fallback Three.js: objet non trouvé (aucun userData id ne matche)');
-          } else {
-            (found as any).updateWorldMatrix?.(true, true);
-
-            const globalBox = new THREE.Box3();
-            const tmp = new THREE.Box3();
-
-            found!.traverse((child: THREE.Object3D) => {
-              const mesh = child as any;
-              const geom = mesh?.geometry as THREE.BufferGeometry | undefined;
-              if (!geom) return;
-              if (!geom.boundingBox && typeof geom.computeBoundingBox === 'function') {
-                geom.computeBoundingBox();
+      for (const paramSource of paramSources) {
+        if (!paramSource || typeof paramSource !== 'object') continue;
+        
+        vrLogger.addPersistentLog(`[TP] Analyse paramètres, clés: [${Object.keys(paramSource).slice(0, 10).join(', ')}]`);
+        
+        for (const key in paramSource) {
+          const param = paramSource[key];
+          if (param && typeof param === 'object') {
+            // Chercher des paramètres de position
+            if (key.toLowerCase().includes('location') || 
+                key.toLowerCase().includes('position') ||
+                key.toLowerCase().includes('point')) {
+              
+              const coords = extractCoordinates(param, key);
+              if (coords) {
+                vrLogger.addPersistentLog(`[TP] Position trouvée via paramètre ${key}: x=${coords.x}, y=${coords.y}, z=${coords.z}`);
+                
+                const transformed = applySpeckleTransform(coords);
+                vrLogger.addPersistentLog(`[TP] Après transformation: x=${transformed.x}, y=${transformed.y}, z=${transformed.z}`);
+                
+                const finalPos = specklePointToThreeMeters(viewer, transformed);
+                vrLogger.addPersistentLog(`[TP] ✅ Position finale via paramètre: (${finalPos.x.toFixed(2)}, ${finalPos.y.toFixed(2)}, ${finalPos.z.toFixed(2)})`);
+                
+                return finalPos;
               }
-              if (geom.boundingBox) {
-                tmp.copy(geom.boundingBox);
-                tmp.applyMatrix4((mesh as any).matrixWorld);
-                globalBox.union(tmp);
-              }
-            });
-
-            if (!globalBox.isEmpty()) {
-              const c = new THREE.Vector3(); globalBox.getCenter(c);
-              vrLogger.addPersistentLog('[TP] centre via fallback Three.js ✓');
-              return c;
-            } else {
-              vrLogger.addPersistentLog('[TP] fallback Three.js: bbox vide');
             }
           }
         }
-      } catch {
-        vrLogger.addPersistentLog('[TP] fallback Three.js a levé une exception');
       }
 
-      vrLogger.addPersistentLog('[TP] centre non calculable (tous essais KO)');
+      // 3. Fallback: chercher toute propriété qui ressemble à des coordonnées
+      function searchAllProperties(obj: any, path = ''): {x: number, y: number, z: number} | null {
+        if (!obj || typeof obj !== 'object') return null;
+        
+        for (const key in obj) {
+          const val = obj[key];
+          const currentPath = path ? `${path}.${key}` : key;
+          
+          // Test direct si c'est des coordonnées
+          const coords = extractCoordinates(val, currentPath);
+          if (coords) {
+            vrLogger.addPersistentLog(`[TP] Coordonnées trouvées via ${currentPath}: x=${coords.x}, y=${coords.y}, z=${coords.z}`);
+            return coords;
+          }
+          
+          // Récursion limitée
+          if (typeof val === 'object' && path.split('.').length < 3) {
+            const result = searchAllProperties(val, currentPath);
+            if (result) return result;
+          }
+        }
+        return null;
+      }
+
+      const fallbackCoords = searchAllProperties(rawData);
+      if (fallbackCoords) {
+        const transformed = applySpeckleTransform(fallbackCoords);
+        const finalPos = specklePointToThreeMeters(viewer, transformed);
+        vrLogger.addPersistentLog(`[TP] ✅ Position fallback: (${finalPos.x.toFixed(2)}, ${finalPos.y.toFixed(2)}, ${finalPos.z.toFixed(2)})`);
+        return finalPos;
+      }
+
+      vrLogger.addPersistentLog('[TP] ❌ Aucune position trouvée dans les paramètres Speckle');
       return null;
-    } catch {
-      vrLogger.addPersistentLog('[TP] centre: exception inattendue');
+
+    } catch (error) {
+      vrLogger.addPersistentLog(`[TP] ERREUR: ${(error as Error).message}`);
       return null;
     }
+  }
+
+  // Fonction utilitaire pour extraire des coordonnées depuis différents formats
+  function extractCoordinates(data: any, source: string): {x: number, y: number, z: number} | null {
+    if (!data || typeof data !== 'object') return null;
+    
+    let x, y, z;
+    
+    // Format 1: {x, y, z}
+    if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
+      x = data.x; y = data.y; z = data.z;
+    }
+    // Format 2: {X, Y, Z}
+    else if (typeof data.X === 'number' && typeof data.Y === 'number' && typeof data.Z === 'number') {
+      x = data.X; y = data.Y; z = data.Z;
+    }
+    // Format 3: Tableau [x, y, z]
+    else if (Array.isArray(data) && data.length >= 3 && 
+            typeof data[0] === 'number' && typeof data[1] === 'number' && typeof data[2] === 'number') {
+      x = data[0]; y = data[1]; z = data[2];
+    }
+    // Format 4: Propriété value imbriquée
+    else if (data.value) {
+      return extractCoordinates(data.value, source + '.value');
+    }
+    // Format 5: Paramètre Speckle avec propriété value
+    else if (data.speckletype && data.value !== undefined) {
+      if (typeof data.value === 'string') {
+        // Parfois les coordonnées sont en string format "x,y,z"
+        const parts = data.value.split(',').map((p: string) => parseFloat(p.trim()));
+        if (parts.length >= 3 && parts.every((p: number) => !isNaN(p))) {
+          x = parts[0]; y = parts[1]; z = parts[2];
+        }
+      } else {
+        return extractCoordinates(data.value, source + '.speckleValue');
+      }
+    }
+    
+    // Validation finale
+    if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number' && 
+        !isNaN(x) && !isNaN(y) && !isNaN(z)) {
+      return { x, y, z };
+    }
+    
+    return null;
   }
 
   // Crée un panneau 2D (plane) avec une texture canvas (titre + 3 items fictifs)
@@ -762,7 +956,7 @@ async function main() {
     return mesh;
   }
 
-  // Fonction pour mettre à jour le menu (redessiner avec le nouvel état)
+  // Version modifiée de updateVrMenuPlane avec indicateurs de scroll
   function updateVrMenuPlane(menuMesh: THREE.Mesh) {
     const canvas = document.createElement('canvas');
     canvas.width = 1024;
@@ -784,8 +978,17 @@ async function main() {
     ctx.fillStyle = '#000';
     ctx.font = 'bold 52px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('MENU VR ACTIF', canvas.width / 2, 85);
+    const headerText = menuMode === 'tpList' ? 'TELEPORTATION' : menuMode === 'image360List' ? 'IMAGES 360' : 'MENU VR ACTIF';
+    ctx.fillText(headerText, canvas.width / 2, 85);
     ctx.textAlign = 'left';
+
+    // Zone de clipping pour les boutons scrollables
+    if (menuMode === 'tpList') {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(40, 150, canvas.width - 80, 400);
+      ctx.clip();
+    }
 
     // Dessiner les boutons selon l'état actuel
     menuState.buttons.forEach((button) => {
@@ -805,18 +1008,60 @@ async function main() {
       ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
       
       ctx.strokeStyle = textColor;
-      ctx.lineWidth = 6;
+      ctx.lineWidth = 4;
       ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
       
       ctx.fillStyle = textColor;
-      ctx.font = 'bold 42px Arial';
-      ctx.fillText(button.currentLabel, bounds.x + 30, bounds.y + 65);
+      ctx.font = 'bold 32px Arial';
+      ctx.fillText(button.currentLabel, bounds.x + 20, bounds.y + 50);
     });
 
+    if (menuMode === 'tpList') {
+      ctx.restore();
+      
+      // Indicateurs de scroll
+      if (maxScrollOffset > 0) {
+        const scrollBarHeight = 300;
+        const scrollBarY = 200;
+        const scrollBarX = canvas.width - 40;
+        
+        // Barre de scroll background
+        ctx.fillStyle = '#333333';
+        ctx.fillRect(scrollBarX, scrollBarY, 20, scrollBarHeight);
+        
+        // Position du curseur de scroll
+        const scrollRatio = menuScrollOffset / maxScrollOffset;
+        const cursorHeight = Math.max(20, scrollBarHeight * (5 / (teleportPoints.length + 1)));
+        const cursorY = scrollBarY + (scrollBarHeight - cursorHeight) * scrollRatio;
+        
+        ctx.fillStyle = '#ff6b00';
+        ctx.fillRect(scrollBarX, cursorY, 20, cursorHeight);
+        
+        // Flèches de scroll
+        ctx.fillStyle = menuScrollOffset > 0 ? '#00ff00' : '#666666';
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('▲', scrollBarX + 10, scrollBarY - 10);
+        
+        ctx.fillStyle = menuScrollOffset < maxScrollOffset ? '#00ff00' : '#666666';
+        ctx.fillText('▼', scrollBarX + 10, scrollBarY + scrollBarHeight + 30);
+      }
+    }
+
+    // Instructions en bas
     ctx.fillStyle = '#00ff00';
-    ctx.font = 'bold 28px Arial';
-    ctx.fillText(`Survolé: ${menuState.hoveredButtonId || 'aucun'}`, 50, canvas.height - 60);
-    ctx.fillText('Visez avec le contrôleur - Gâchette pour cliquer', 50, canvas.height - 30);
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'left';
+    if (menuMode === 'tpList' && maxScrollOffset > 0) {
+      ctx.fillText('Stick droit: Scroll | Gâchette: Sélectionner', 50, canvas.height - 30);
+    } else {
+      ctx.fillText('Visez avec le contrôleur - Gâchette pour cliquer', 50, canvas.height - 30);
+    }
+
+    // Debug info
+    ctx.fillStyle = '#888888';
+    ctx.font = '16px Arial';
+    ctx.fillText(`Survolé: ${menuState.hoveredButtonId || 'aucun'} | Scroll: ${menuScrollOffset}/${maxScrollOffset}`, 50, canvas.height - 60);
 
     // Mettre à jour la texture
     const tex = new THREE.CanvasTexture(canvas);
@@ -824,6 +1069,31 @@ async function main() {
     tex.needsUpdate = true;
     (menuMesh.material as THREE.MeshBasicMaterial).map = tex;
     (menuMesh.material as THREE.MeshBasicMaterial).needsUpdate = true;
+  }
+
+  // Fonction pour gérer le scroll du menu
+  function handleMenuScroll(yInput: number) {
+    if ((menuMode !== 'tpList' && menuMode !== 'image360List') || maxScrollOffset <= 0) return;
+    
+    const scrollSpeed = 30;
+    const deadzone = 0.15;
+    
+    if (Math.abs(yInput) > deadzone) {
+      const prevOffset = menuScrollOffset;
+      menuScrollOffset -= yInput * scrollSpeed;
+      menuScrollOffset = Math.max(0, Math.min(menuScrollOffset, maxScrollOffset));
+      
+      if (Math.abs(menuScrollOffset - prevOffset) > 1) {
+        if (menuMode === 'tpList') {
+          menuState.buttons = buildTeleportButtons();
+        } else if (menuMode === 'image360List') {
+          menuState.buttons = buildImage360Buttons();
+        }
+        return true;
+      }
+    }
+    
+    return false;
   }
 
   // Système de raycasting pour detecter sur quel bouton on pointe
@@ -867,6 +1137,18 @@ async function main() {
     return null;
   }
 
+  function setAllCamerasClipping(renderer: any, near = 0.002, far = 2000) {
+    // caméra XR (est un "ArrayCamera" contenant .cameras)
+    const xrCam:any = renderer.xr.getCamera();
+    const list: THREE.Camera[] =
+      (xrCam && xrCam.cameras && Array.isArray(xrCam.cameras)) ? xrCam.cameras : (xrCam ? [xrCam] : []);
+    for (const c of list) {
+      if ('near' in c) (c as any).near = near;
+      if ('far' in c)  (c as any).far = far;  // Augmenter cette valeur
+      (c as any).updateProjectionMatrix?.();
+    }
+  }
+
   // Distance/offsets centralisés
   const MENU_DISTANCE = 1.8;     // 1.8 m devant (au lieu de 1.0/1.5)
   const MENU_Y_OFFSET = +0.18;   // +18 cm (légèrement AU-DESSUS du regard)
@@ -886,6 +1168,78 @@ async function main() {
     menu.position.copy(pos);
     menu.lookAt(camPos);
     return true;
+  }
+
+  // Fonction pour créer un laser visible
+  function createLaser(color: number = 0xff0000): THREE.Line {
+    const points = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, -2)
+    ];
+    
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: 0.8,
+      depthTest: false,    
+      depthWrite: false   
+    });
+    
+    const line = new THREE.Line(geometry, material);
+    line.name = 'VR_LASER';
+    line.visible = true;
+    line.frustumCulled = false;
+    line.renderOrder = 1001; // Plus élevé que le menu (1000)
+    
+    return line;
+  }
+
+  // Fonction pour mettre à jour la longueur et la visibilité du laser
+  function updateLaser(laser: THREE.Line, controller: THREE.Object3D, menuMesh: THREE.Mesh | null) {
+    if (!laser || !controller) return;
+
+    // Force la visibilité
+    laser.visible = true;
+    
+    // Vérifier que le laser est bien attaché
+    if (!controller.children.includes(laser)) {
+      controller.add(laser);
+    }
+    
+    // Créer un raycaster depuis le contrôleur
+    const raycaster = new THREE.Raycaster();
+    const origin = new THREE.Vector3();
+    const direction = new THREE.Vector3(0, 0, -1);
+    
+    controller.getWorldPosition(origin);
+    direction.transformDirection(controller.matrixWorld);
+    raycaster.set(origin, direction);
+    
+    let intersectionDistance = 2; // Distance par défaut
+    let laserColor = 0xff0000; // Rouge par défaut
+    
+    // Si le menu est visible, tester l'intersection
+    if (menuMesh && menuMesh.visible) {
+      const intersects = raycaster.intersectObject(menuMesh);
+      if (intersects.length > 0) {
+        intersectionDistance = intersects[0].distance;
+        laserColor = 0x00ff00; // Vert quand on vise le menu
+      }
+    }
+    
+    // Mettre à jour la géométrie du laser
+    const points = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, -intersectionDistance)
+    ];
+    
+    const geometry = laser.geometry as THREE.BufferGeometry;
+    geometry.setFromPoints(points);
+    geometry.attributes.position.needsUpdate = true;
+    
+    // Mettre à jour la couleur
+    (laser.material as THREE.LineBasicMaterial).color.setHex(laserColor);
   }
 
   // Système de détection des boutons amélioré
@@ -1341,20 +1695,7 @@ async function main() {
         const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
         await threeRenderer.xr.setSession(session);
 
-        function setAllCamerasClipping(renderer: any, near = 0.02, far = 2000) {
-        // caméra XR (est un "ArrayCamera" contenant .cameras)
-        const xrCam:any = renderer.xr.getCamera();
-        const list: THREE.Camera[] =
-          (xrCam && xrCam.cameras && Array.isArray(xrCam.cameras)) ? xrCam.cameras : (xrCam ? [xrCam] : []);
-        for (const c of list) {
-          if ('near' in c) (c as any).near = near;
-          if ('far' in c)  (c as any).far = far;
-          (c as any).updateProjectionMatrix?.();
-        }
-      }
-
-      // juste après setSession(...)
-      setAllCamerasClipping(threeRenderer, 0.002, 500);
+        setAllCamerasClipping(threeRenderer, 0.002, 5000);
 
       // === CRÉATION DES CONTRÔLEURS (CRUCIAL) ===
       const controller0 = threeRenderer.xr.getController(0);
@@ -1374,22 +1715,6 @@ async function main() {
       const controllerGrip1Model = controllerModelFactory.createControllerModel(controllerGrip1);
       controllerGrip0.add(controllerGrip0Model);
       controllerGrip1.add(controllerGrip1Model);
-
-      // Créer des rayons visuels pour les contrôleurs
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(0, 0, -1)
-      ]);
-      const line = new THREE.Line(geometry);
-      const line2 = line.clone();
-      
-      // Matériaux pour les rayons
-      line.material = new THREE.LineBasicMaterial({ color: 0xff0000 });
-      line2.material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
-      
-      controller0.add(line.clone());
-      controller1.add(line2.clone());
-
 
         // Créer le panel de debug
         debugText = createDebugPanel();
@@ -1461,8 +1786,8 @@ async function main() {
         const tmpDir     = new THREE.Vector3();
         const rightVec   = new THREE.Vector3();
 
-        const SPEED_BASE = 3.0;     // m/s (plus rapide qu’avant)
-        const VERT_SPEED = 2.0;     // m/s montée/descente drone
+        const SPEED_BASE = 5.0;     // m/s (plus rapide qu’avant)
+        const VERT_SPEED = 3.0;     // m/s montée/descente drone
         const DZ         = 0.15;    // deadzone sticks
 
         function getAxes(src: XRInputSource): { x: number; y: number } {
@@ -1500,9 +1825,22 @@ async function main() {
               vrLogger.addLog(`TreeNodeMap size: ${treeNodeMap?.size || 0}`);
               
               // FORCER l'appel sans condition
-              upsertScenePoint(treeNodeMap, viewer);
+              upsertAllTeleportPoints(treeNodeMap, viewer);
 
               if (vrMenu) setMenuMode('tpList' === menuMode ? 'tpList' : 'root', vrMenu);
+            }
+          }
+
+          const cam = threeRenderer.xr.getCamera();
+          if (cam) {
+            // Forcer des paramètres de clipping généreux
+            const cameras = cam.cameras || [cam];
+            for (const camera of cameras) {
+              if (camera.near !== 0.001) {
+                camera.near = 0.001;  // Très proche
+                camera.far = 10000;   // Très loin
+                camera.updateProjectionMatrix();
+              }
             }
           }
           // Analyser chaque contrôleur
@@ -1551,9 +1889,48 @@ async function main() {
             if (inputSource.handedness === 'right') {
               const { x, y } = getAxes(inputSource);
               if (Math.abs(y) > DZ) {
-                const dt = 1 / 60;
-                moveOffset.y += (-y) * VERT_SPEED * dt;
+                // Si le menu TP est ouvert, utiliser pour scroll
+                if (vrMenuVisible && menuMode === 'tpList') {
+                  const scrollChanged = handleMenuScroll(-y); 
+                  if (scrollChanged && vrMenu) {
+                    updateVrMenuPlane(vrMenu);
+                  }
+                } else {
+                  // Mode vol normal
+                  const dt = 1 / 60;
+                  moveOffset.y += (-y) * VERT_SPEED * dt;
+                }
               }
+            }
+            // === MISE À JOUR DES LASERS ===
+            if (laserLine0 && controller0) {
+              // Laser visible seulement si menu ouvert ou toujours (selon vos préférences)
+              const shouldShowLaser = vrMenuVisible || true; // Mettre false si vous voulez masquer quand menu fermé
+              laserLine0.visible = shouldShowLaser;
+              
+              if (shouldShowLaser) {
+                updateLaser(laserLine0, controller0, vrMenu);
+              }
+            }
+
+            if (laserLine1 && controller1) {
+              const shouldShowLaser = vrMenuVisible || true; // Mettre false si vous voulez masquer quand menu fermé
+              laserLine1.visible = shouldShowLaser;
+              
+              if (shouldShowLaser) {
+                updateLaser(laserLine1, controller1, vrMenu);
+              }
+            }
+
+            // Dans la section de nettoyage (session.addEventListener('end', ...)), ajoutez :
+            // Nettoyer les lasers
+            if (laserLine0) {
+              controller0?.remove(laserLine0);
+              laserLine0 = null;
+            }
+            if (laserLine1) {
+              controller1?.remove(laserLine1);
+              laserLine1 = null;
             }
           }
           
@@ -1604,32 +1981,40 @@ async function main() {
                   debugLines.push('Action: Ouvrir sous-menu TP');
                   setMenuMode('tpList', vrMenu);
                   break;
-                case 'settings':
-                  debugLines.push('Action: Ouvrir paramètres');
+                case 'image360': // Nouveau case
+                  debugLines.push('Action: Ouvrir sous-menu Images 360');
+                  setMenuMode('image360List', vrMenu);
                   break;
                 case 'desktop':
                   debugLines.push('Action: Retour desktop');
                   break;
-
                 case 'back':
-                debugLines.push('Action: Retour au menu principal');
-                setMenuMode('root', vrMenu);
-                break;
-
-              default:
-                // Items dynamiques de TP : ids "tp_<id>"
-                if (hoveredButtonId.startsWith('tp_')) {
-                  const tpId = hoveredButtonId.substring(3);
-                  const tp = teleportPoints.find(p => p.id === tpId);
+                  debugLines.push('Action: Retour au menu principal');
+                  setMenuMode('root', vrMenu);
+                  break;
+                default:
+                  // Gérer les clics sur les points de téléportation ET les images 360
+                  const tp = teleportPoints.find(p => p.id === hoveredButtonId);
                   if (tp) {
-                    debugLines.push(`Action: TP vers ${tp.label}`);
-                    teleportToWorldPosition(tp.position, threeRenderer);
-                    menuToggleRequested = true;
+                    if (menuMode === 'image360List') {
+                      debugLines.push(`Action: Afficher image 360 pour ${tp.label}`);
+                      // TODO: Ici on ajoutera l'appel à votre Image360Manager
+                      teleportToWorldPosition(tp.position, threeRenderer);
+                      // Fermer le menu après action
+                      vrMenuVisible = false;
+                      if (vrMenu) vrMenu.visible = false;
+                    } else {
+                      debugLines.push(`Action: TP vers ${tp.label}`);
+                      teleportToWorldPosition(tp.position, threeRenderer);
+                      vrMenuVisible = false;
+                      if (vrMenu) vrMenu.visible = false;
+                    }
+                  } else {
+                    debugLines.push(`Bouton non géré: ${hoveredButtonId}`);
                   }
-                }
-                break;
+                  break;
               }
-              
+
               // Reset du bouton après 2 secondes
               setTimeout(() => {
                 if (vrMenu && vrMenuVisible) {
@@ -1665,6 +2050,19 @@ async function main() {
               debugText.lookAt(camPos);
             }
           }
+
+          // Créer les lasers seulement quand les contrôleurs sont prêts
+          if (!laserLine0 && controller0 && controller0.visible) {
+            laserLine0 = createLaser(0xff0000);
+            controller0.add(laserLine0);
+            debugLines.push('Laser 0 créé et attaché');
+          }
+          
+          if (!laserLine1 && controller1 && controller1.visible) {
+            laserLine1 = createLaser(0x00ff00);
+            controller1.add(laserLine1);
+            debugLines.push('Laser 1 créé et attaché');
+          }
           
           // Déplacement (votre code existant)
           if (moveOffset.lengthSq() > 0) {
@@ -1678,7 +2076,7 @@ async function main() {
             if (offset) threeRenderer.xr.setReferenceSpace(offset);
             moveOffset.set(0, 0, 0);
           }
-          
+
           updateDebugPanel(debugText, debugLines);
           viewer.requestRender();
           xrAfId = session.requestAnimationFrame(onXRFrame);
@@ -1705,6 +2103,16 @@ async function main() {
             scene.remove(debugText);
             debugText = null;
           }
+
+          // Nettoyer les lasers
+          if (laserLine0) {
+            controller0?.remove(laserLine0);
+            laserLine0 = null;
+          }
+          if (laserLine1) {
+            controller1?.remove(laserLine1);
+            laserLine1 = null;
+          }
           
           // Retirer les contrôleurs
           scene.remove(controller0);
@@ -1717,7 +2125,7 @@ async function main() {
 
 
         // 🔢 tes coordonnées Speckle (en cm) lues dans properties.location
-        const targetSpeckle = { x: 7310.294959203268, y: -1563.358968165413, z: 4290.0 };
+        const targetSpeckle = { x: 7310.294959203261, y: -1563.358968165413, z: 4290.0 };
 
         // ↪️ converties en coords Three (m) APRÈS axisFix
         const targetM = specklePointToThreeMeters(viewer, targetSpeckle);
@@ -1747,11 +2155,11 @@ async function main() {
       }
     });
 
-    // Bouton "Quitter la VR"
-    const btnExitVR: any = folderVR.addButton({ title: 'Quitter la VR' });
-    btnExitVR.on('click', () => {
-      threeRenderer.xr.getSession?.()?.end();
-    });
+    // // Bouton "Quitter la VR"
+    // const btnExitVR: any = folderVR.addButton({ title: 'Quitter la VR' });
+    // btnExitVR.on('click', () => {
+    //   threeRenderer.xr.getSession?.()?.end();
+    // });
 
 
     //#endregion
