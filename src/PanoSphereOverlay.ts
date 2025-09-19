@@ -55,6 +55,9 @@ export class PanoSphereOverlay {
     tex.minFilter = THREE.LinearFilter
     tex.magFilter = THREE.LinearFilter
     tex.generateMipmaps = false
+    tex.wrapS = THREE.RepeatWrapping
+    tex.repeat.x = -1
+    tex.offset.x = 1
     tex.needsUpdate = true
     this.tex = tex
 
